@@ -4,6 +4,7 @@ import { auth } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { runScan } from "@/lib/scanner/runner";
 import { ALL_TIMEFRAMES } from "@/lib/scanner/candles";
+import { DEFAULT_STRATEGY } from "@/lib/scanner/strategies";
 
 const requestSchema = z.object({
   market: z.enum(["FOREX", "CRYPTO"]),
@@ -12,7 +13,8 @@ const requestSchema = z.object({
     .array(z.enum(ALL_TIMEFRAMES as [string, ...string[]]))
     .min(1)
     .max(ALL_TIMEFRAMES.length),
-  indicators: z.array(z.enum(["rsi-ema-wma", "macd-cross"])).min(1),
+  // Single strategy. Field accepted for backward-compat but ignored.
+  indicators: z.array(z.enum(["ema-wma-on-rsi"])).optional(),
   limitPerTF: z.coerce.number().int().min(50).max(1000).optional(),
   name: z.string().max(120).optional(),
 });
@@ -42,6 +44,7 @@ export async function POST(req: Request) {
     const result = await runScan({
       userId: session.user.id,
       ...parsed.data,
+      indicators: [DEFAULT_STRATEGY],
     });
     return NextResponse.json(result);
   } catch (err) {

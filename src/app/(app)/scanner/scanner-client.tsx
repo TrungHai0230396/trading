@@ -32,10 +32,7 @@ import {
   TIMEFRAME_LABELS,
   type Timeframe,
 } from "@/lib/scanner/candles";
-import {
-  ALL_STRATEGIES,
-  type StrategyId,
-} from "@/lib/scanner/strategies";
+import { DEFAULT_STRATEGY } from "@/lib/scanner/strategies";
 import type {
   PerTimeframeResult,
   ScanResult,
@@ -52,7 +49,6 @@ type FormState = {
   market: Market;
   symbols: string[];
   timeframes: Timeframe[];
-  indicators: StrategyId[];
   limitPerTF: string;
 };
 
@@ -60,7 +56,6 @@ const initialState = (): FormState => ({
   market: "CRYPTO",
   symbols: [...DEFAULT_CRYPTO],
   timeframes: [...ALL_TIMEFRAMES],
-  indicators: ["rsi-ema-wma", "macd-cross"],
   limitPerTF: "200",
 });
 
@@ -110,14 +105,6 @@ export function ScannerClient() {
         : [...prev.timeframes, tf],
     }));
 
-  const toggleIndicator = (id: StrategyId) =>
-    setState((prev) => ({
-      ...prev,
-      indicators: prev.indicators.includes(id)
-        ? prev.indicators.filter((x) => x !== id)
-        : [...prev.indicators, id],
-    }));
-
   const runScan = useMutation({
     mutationFn: async () => {
       const limitPerTF = Number(state.limitPerTF) || 200;
@@ -128,7 +115,7 @@ export function ScannerClient() {
           market: state.market,
           symbols: state.symbols,
           timeframes: state.timeframes,
-          indicators: state.indicators,
+          indicators: [DEFAULT_STRATEGY],
           limitPerTF,
         }),
       });
@@ -147,7 +134,6 @@ export function ScannerClient() {
   const canRun =
     state.symbols.length > 0 &&
     state.timeframes.length > 0 &&
-    state.indicators.length > 0 &&
     !runScan.isPending;
 
   return (
@@ -159,8 +145,9 @@ export function ScannerClient() {
             Cấu hình quét
           </CardTitle>
           <CardDescription>
-            Chọn thị trường, symbol, khung thời gian và chỉ báo rồi bấm{" "}
-            <strong>Quét</strong>.
+            Chọn thị trường, symbol và khung thời gian rồi bấm{" "}
+            <strong>Quét</strong>. Bullish khi đường EMA(9) cắt lên trên đường
+            WMA(45) trên RSI(14).
           </CardDescription>
         </CardHeader>
 
@@ -272,19 +259,22 @@ export function ScannerClient() {
 
           <div className="space-y-1.5">
             <Label>Chỉ báo</Label>
-            <div className="flex flex-col gap-2">
-              {ALL_STRATEGIES.map((s) => (
-                <label
-                  key={s.id}
-                  className="flex cursor-pointer items-center gap-2 rounded-md border bg-card/40 px-2.5 py-1.5 text-sm"
-                >
-                  <Checkbox
-                    checked={state.indicators.includes(s.id)}
-                    onCheckedChange={() => toggleIndicator(s.id)}
-                  />
-                  <span>{s.label}</span>
-                </label>
-              ))}
+            <div className="rounded-md border bg-card/40 px-3 py-2.5 text-xs leading-relaxed text-muted-foreground">
+              <div className="font-medium text-foreground">
+                EMA(9) cắt WMA(45) trên RSI(14)
+              </div>
+              <div className="mt-1.5 flex items-center gap-2">
+                <span className="inline-flex items-center gap-1">
+                  <span className="inline-block size-2 rounded-full bg-bullish" />
+                  EMA (xanh lá)
+                </span>
+                <span className="text-muted-foreground/60">cắt lên trên</span>
+                <span className="inline-flex items-center gap-1">
+                  <span className="inline-block size-2 rounded-full bg-info" />
+                  WMA (xanh dương)
+                </span>
+                <span>= Bullish</span>
+              </div>
             </div>
           </div>
 

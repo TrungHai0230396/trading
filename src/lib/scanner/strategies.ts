@@ -4,34 +4,37 @@ import { wma } from "@/lib/indicators/wma";
 
 export type Signal = "BULLISH" | "BEARISH" | "NEUTRAL";
 
-export type StrategyId = "rsi-ema-wma" | "macd-cross";
+/**
+ * Single strategy: port of `rsi_bot/core/indicators.py:analyze_symbol`.
+ *
+ *   rsi      = RSI(closes, 14)
+ *   emaOnRsi = EMA(rsiSeries, 9)    (đường xanh lá)
+ *   wmaOnRsi = WMA(rsiSeries, 45)   (đường xanh dương)
+ *
+ * Bullish khi đường xanh lá (EMA) cắt lên trên đường xanh dương (WMA).
+ */
+export type StrategyId = "ema-wma-on-rsi";
 
 export type StrategyResult = {
   signal: Signal;
   indicators: Record<string, number>;
 };
 
-const STRATEGY_IDS: StrategyId[] = ["rsi-ema-wma", "macd-cross"];
+const STRATEGY_IDS: StrategyId[] = ["ema-wma-on-rsi"];
 
 export function isStrategyId(s: string): s is StrategyId {
   return (STRATEGY_IDS as string[]).includes(s);
 }
 
 export const STRATEGY_LABELS: Record<StrategyId, string> = {
-  "rsi-ema-wma": "RSI(14) + EMA9 / WMA45",
-  "macd-cross": "EMA20 / EMA50 cross",
+  "ema-wma-on-rsi": "EMA(9) cắt WMA(45) trên RSI(14)",
 };
+
+export const DEFAULT_STRATEGY: StrategyId = "ema-wma-on-rsi";
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
-/**
- * RSI-EMA-WMA crossover (port of the user's RSI bot).
- *  - rsiSeries = RSI(closes, 14)
- *  - emaOnRsi  = EMA(rsiSeries, 9)
- *  - wmaOnRsi  = WMA(rsiSeries, 45)
- *  - emaOnRsi > wmaOnRsi → BULLISH; < → BEARISH; NaN/equal → NEUTRAL.
- */
-export function rsiEmaWmaStrategy(closes: number[]): StrategyResult {
+export function emaWmaOnRsiStrategy(closes: number[]): StrategyResult {
   const rsiSeries = rsi(closes, 14);
   const emaOnRsi = ema(rsiSeries, 9);
   const wmaOnRsi = wma(rsiSeries, 45);
@@ -57,40 +60,9 @@ export function rsiEmaWmaStrategy(closes: number[]): StrategyResult {
   };
 }
 
-/**
- * EMA20 / EMA50 crossover (port of the user's MACD bot — its actual logic
- * is an EMA20/EMA50 cross, not the classic MACD line/signal cross).
- */
-export function macdCrossStrategy(closes: number[]): StrategyResult {
-  const e20 = ema(closes, 20);
-  const e50 = ema(closes, 50);
-
-  const last = closes.length - 1;
-  const a = e20[last];
-  const b = e50[last];
-
-  let signal: Signal = "NEUTRAL";
-  if (Number.isFinite(a) && Number.isFinite(b)) {
-    if (a > b) signal = "BULLISH";
-    else if (a < b) signal = "BEARISH";
-  }
-
-  return {
-    signal,
-    indicators: {
-      ema20: Number.isFinite(a) ? round2(a) : NaN,
-      ema50: Number.isFinite(b) ? round2(b) : NaN,
-    },
-  };
-}
-
-export function runStrategy(id: StrategyId, closes: number[]): StrategyResult {
-  switch (id) {
-    case "rsi-ema-wma":
-      return rsiEmaWmaStrategy(closes);
-    case "macd-cross":
-      return macdCrossStrategy(closes);
-  }
+export function runStrategy(_id: StrategyId, closes: number[]): StrategyResult {
+  // Only one strategy for now — id parameter kept for API compatibility.
+  return emaWmaOnRsiStrategy(closes);
 }
 
 export const ALL_STRATEGIES: { id: StrategyId; label: string }[] =
