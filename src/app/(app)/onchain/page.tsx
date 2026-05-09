@@ -1,6 +1,5 @@
 import { PageHeader } from "@/components/page-header";
-import { EmptyState } from "@/components/empty-state";
-import { Boxes } from "lucide-react";
+import { OnchainClient } from "./onchain-client";
 
 export default function OnchainPage() {
   return (
@@ -9,11 +8,7 @@ export default function OnchainPage() {
         title="Phân tích On-chain"
         description="Dán địa chỉ ví/token/tx — lấy dữ liệu on-chain (ETH/BSC) và để Gemini viết báo cáo dòng tiền/risk."
       />
-      <EmptyState
-        icon={Boxes}
-        title="Đang phát triển"
-        description="Sẽ tích hợp Etherscan/BscScan + DefiLlama và pipeline AI tạo báo cáo."
-      />
+      <OnchainClient />
     </div>
   );
 }
