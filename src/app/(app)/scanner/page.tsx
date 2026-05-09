@@ -1,19 +1,23 @@
+import Link from "next/link";
+import { History } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { PageHeader } from "@/components/page-header";
-import { EmptyState } from "@/components/empty-state";
-import { Radar } from "lucide-react";
+import { ScannerClient } from "./scanner-client";
 
 export default function ScannerPage() {
   return (
     <div className="mx-auto max-w-7xl">
       <PageHeader
         title="Quét đa khung thời gian"
-        description="Quét top coin/forex bằng RSI/MACD/EMA kết hợp nhiều khung thời gian — chỉ báo tín hiệu khi các TF cùng đồng thuận."
+        description="Chấm điểm đồng thuận RSI/EMA-WMA và EMA20/EMA50 trên các khung 1h, 4h, 1d. Điểm 0 = bearish toàn phần, 100 = bullish toàn phần."
+        actions={
+          <Button variant="outline" render={<Link href="/scanner/runs" />}>
+            <History className="mr-1 size-4" />
+            Lịch sử quét
+          </Button>
+        }
       />
-      <EmptyState
-        icon={Radar}
-        title="Đang phát triển"
-        description="Tôi sẽ port logic 3-TF alignment từ bot RSI hiện tại và bổ sung MACD/EMA ở giai đoạn tiếp theo."
-      />
+      <ScannerClient />
     </div>
   );
 }
