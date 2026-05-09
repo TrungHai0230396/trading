@@ -1,0 +1,28 @@
+.git
+.github
+node_modules
+.next
+.next/cache
+.turbo
+.vscode
+.idea
+.DS_Store
+
+# generated client is rebuilt inside the image
+src/generated
+
+# local env / dev artifacts (build args supply real values)
+.env
+.env.local
+.env.development
+.env.test
+.env.production
+*.log
+
+coverage
+dist
+build
+
+# helpful for keeping context tight
+README.md
+docs

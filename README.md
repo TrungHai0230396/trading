@@ -25,31 +25,45 @@ AI-summarized news and on-chain analysis — in one place.
 | **P6** | On-chain analysis (ETH + BSC + DefiLlama + Gemini) |
 | **P7** | Dashboard wired to real data |
 
-## Local setup
+## Run it (Docker — recommended)
+
+The whole stack — Next.js app + MySQL — comes up with one command. The
+app container runs `prisma migrate deploy` on boot, so first launch
+creates the schema for you.
 
 ```bash
-# 1. Install deps (pnpm 10+ recommended)
-pnpm install
-
-# 2. Spin up MySQL
-docker compose up -d
-
-# 3. Configure env
+# 1. Configure env (only needed once)
 cp .env.example .env
-# then fill in AUTH_SECRET and ENCRYPTION_KEY:
-#   openssl rand -base64 32   # AUTH_SECRET
-#   openssl rand -hex 32      # ENCRYPTION_KEY
+#   openssl rand -base64 32   # paste into AUTH_SECRET
+#   openssl rand -hex 32      # paste into ENCRYPTION_KEY
 
-# 4. Apply schema
-pnpm prisma migrate dev --name init
-
-# 5. Run
-pnpm dev
+# 2. Build images + start everything
+docker compose up -d --build
 ```
 
 Visit <http://localhost:3000>. The first request redirects to `/register`
-(allowed once `ALLOW_REGISTRATION=true`). After registering, set
-`ALLOW_REGISTRATION=false` in `.env` to lock down the app.
+(allowed while `ALLOW_REGISTRATION=true`). After registering, set
+`ALLOW_REGISTRATION=false` in `.env` and `docker compose restart app`.
+
+```bash
+docker compose logs -f app   # tail the app
+docker compose ps            # see service health
+docker compose stop          # pause everything (data preserved)
+docker compose start         # resume
+docker compose down -v       # nuke containers + DB volume (DESTRUCTIVE)
+```
+
+## Run it (host pnpm dev)
+
+Useful for fast iteration with HMR. The app talks to the dockerized
+MySQL.
+
+```bash
+pnpm install
+docker compose up -d mysql            # MySQL only
+pnpm prisma migrate dev --name init   # first time only
+pnpm dev
+```
 
 ## Useful scripts
 

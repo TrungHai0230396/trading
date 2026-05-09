@@ -23,5 +23,23 @@ services:
       timeout: 5s
       retries: 20
 
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: tranding-app
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      # Override .env so the container talks to the mysql service, not localhost.
+      DATABASE_URL: "mysql://tranding:tranding@mysql:3306/tranding"
+      NODE_ENV: production
+      AUTH_TRUST_HOST: "true"
+    ports:
+      - "3000:3000"
+
 volumes:
   mysql-data:
