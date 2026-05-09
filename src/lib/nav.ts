@@ -6,6 +6,7 @@ import {
   Newspaper,
   Boxes,
   Settings,
+  Sparkles,
   type LucideIcon,
 } from "lucide-react";
 
@@ -48,6 +49,12 @@ export const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
         href: "/scanner",
         icon: Radar,
         description: "RSI/MACD/EMA trên nhiều timeframe",
+      },
+      {
+        label: "Phân tích top",
+        href: "/insights",
+        icon: Sparkles,
+        description: "AI chấm điểm % tăng/giảm cho top 10",
       },
       {
         label: "Tin tức & AI",
