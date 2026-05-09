@@ -17,8 +17,9 @@ export class GeminiError extends Error {
   }
 }
 
-const PRIMARY_MODEL = "gemini-2.0-flash";
-const FALLBACK_MODEL = "gemini-1.5-flash";
+// Google retired the 1.5 family — use 2.5 as fallback when 2.0 is throttled/missing.
+const PRIMARY_MODEL = "gemini-2.5-flash";
+const FALLBACK_MODEL = "gemini-2.0-flash";
 
 export type Sentiment = "bullish" | "bearish" | "neutral";
 export type Impact = "high" | "medium" | "low";
