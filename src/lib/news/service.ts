@@ -9,8 +9,36 @@ import {
   type CryptoPanicArticle,
   type CryptoPanicFilter,
 } from "@/lib/news/cryptopanic";
+import { fetchRssNews, type RssArticle } from "@/lib/news/rss";
 import { summarizeBatch, type SummarizeInput } from "@/lib/ai/gemini";
 import type { NewsArticle, Prisma } from "@/generated/prisma";
+
+/** Unified shape that both source fetchers conform to. */
+type RawArticle = {
+  externalId: string;
+  title: string;
+  url: string;
+  source: string;
+  publishedAt: Date;
+  currencies?: string[];
+};
+
+/**
+ * Pick the configured news source. CryptoPanic if a key is set; otherwise
+ * fall back to public RSS feeds — Gemini summarization still happens.
+ */
+async function fetchSourceArticles(
+  filter: CryptoPanicFilter | undefined,
+): Promise<{ articles: RawArticle[]; usedSource: "cryptopanic" | "rss" }> {
+  if (process.env.CRYPTOPANIC_API_KEY) {
+    const cp: CryptoPanicArticle[] = await fetchCryptoPanicNews(
+      filter ?? "hot",
+    );
+    return { articles: cp, usedSource: "cryptopanic" };
+  }
+  const rss: RssArticle[] = await fetchRssNews();
+  return { articles: rss, usedSource: "rss" };
+}
 
 export type RefreshError = {
   externalId: string;
@@ -66,7 +94,7 @@ export async function refreshNewsForUser(
   userId: string,
   options: { filter?: CryptoPanicFilter } = {},
 ): Promise<RefreshSummary> {
-  const fetched = await fetchCryptoPanicNews(options.filter ?? "hot");
+  const { articles: fetched } = await fetchSourceArticles(options.filter);
   const errors: RefreshError[] = [];
 
   if (fetched.length === 0) {
@@ -89,13 +117,14 @@ export async function refreshNewsForUser(
     return { inserted: 0, skipped, fetched: fetched.length, errors };
   }
 
-  const inputs: (SummarizeInput & { article: CryptoPanicArticle })[] =
-    newOnes.map((a) => ({
+  const inputs: (SummarizeInput & { article: RawArticle })[] = newOnes.map(
+    (a) => ({
       article: a,
       title: a.title,
       source: a.source,
       url: a.url,
-    }));
+    }),
+  );
 
   const outcomes = await summarizeBatch(inputs, {
     concurrency: 3,
