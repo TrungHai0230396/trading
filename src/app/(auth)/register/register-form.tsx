@@ -12,9 +12,9 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
 const schema = z.object({
-  name: z.string().trim().min(1, "Required"),
-  email: z.string().email("Invalid email"),
-  password: z.string().min(8, "At least 8 characters"),
+  name: z.string().trim().min(1, "Bắt buộc"),
+  email: z.string().email("Email không hợp lệ"),
+  password: z.string().min(8, "Tối thiểu 8 ký tự"),
 });
 type FormValues = z.infer<typeof schema>;
 
@@ -38,7 +38,7 @@ export function RegisterForm() {
       const data = (await res.json()) as { error?: string };
 
       if (!res.ok) {
-        toast.error(data.error ?? "Registration failed");
+        toast.error(data.error ?? "Đăng ký thất bại");
         return;
       }
 
@@ -48,7 +48,7 @@ export function RegisterForm() {
         redirect: false,
       });
       if (!signInRes || signInRes.error) {
-        toast.error("Created — please sign in");
+        toast.error("Đã tạo tài khoản — vui lòng đăng nhập");
         router.push("/login");
         return;
       }
@@ -62,7 +62,7 @@ export function RegisterForm() {
   return (
     <form className="space-y-4" onSubmit={onSubmit} noValidate>
       <div className="space-y-1.5">
-        <Label htmlFor="name">Name</Label>
+        <Label htmlFor="name">Tên</Label>
         <Input id="name" autoComplete="name" {...register("name")} />
         {errors.name ? (
           <p className="text-xs text-destructive">{errors.name.message}</p>
@@ -81,7 +81,7 @@ export function RegisterForm() {
         ) : null}
       </div>
       <div className="space-y-1.5">
-        <Label htmlFor="password">Password</Label>
+        <Label htmlFor="password">Mật khẩu</Label>
         <Input
           id="password"
           type="password"
@@ -93,7 +93,7 @@ export function RegisterForm() {
         ) : null}
       </div>
       <Button type="submit" className="w-full" disabled={pending}>
-        {pending ? "Creating account…" : "Create account"}
+        {pending ? "Đang tạo tài khoản…" : "Tạo tài khoản"}
       </Button>
     </form>
   );

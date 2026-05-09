@@ -47,20 +47,20 @@ function normalizeForFxLookup(ccy: string): string {
 export async function POST(req: Request) {
   const session = await auth();
   if (!session?.user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    return NextResponse.json({ error: "Chưa đăng nhập" }, { status: 401 });
   }
 
   let body: unknown;
   try {
     body = await req.json();
   } catch {
-    return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
+    return NextResponse.json({ error: "JSON không hợp lệ" }, { status: 400 });
   }
 
   const parsed = requestSchema.safeParse(body);
   if (!parsed.success) {
     return NextResponse.json(
-      { error: parsed.error.issues[0]?.message ?? "Invalid input" },
+      { error: parsed.error.issues[0]?.message ?? "Dữ liệu không hợp lệ" },
       { status: 400 },
     );
   }
@@ -72,7 +72,7 @@ export async function POST(req: Request) {
       const pair = findForexPair(input.symbol);
       if (!pair) {
         return NextResponse.json(
-          { error: `Unknown forex pair "${input.symbol}".` },
+          { error: `Không nhận diện được cặp forex "${input.symbol}".` },
           { status: 400 },
         );
       }
@@ -145,7 +145,7 @@ export async function POST(req: Request) {
       },
     });
   } catch (err) {
-    const msg = err instanceof Error ? err.message : "Unknown error";
+    const msg = err instanceof Error ? err.message : "Lỗi không xác định";
     return NextResponse.json({ error: msg }, { status: 502 });
   }
 }

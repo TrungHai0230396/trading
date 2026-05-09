@@ -12,8 +12,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
 const schema = z.object({
-  email: z.string().email("Invalid email"),
-  password: z.string().min(6, "At least 6 characters"),
+  email: z.string().email("Email không hợp lệ"),
+  password: z.string().min(6, "Tối thiểu 6 ký tự"),
 });
 type FormValues = z.infer<typeof schema>;
 
@@ -39,7 +39,7 @@ export function LoginForm() {
     setPending(false);
 
     if (!res || res.error) {
-      toast.error("Invalid email or password");
+      toast.error("Email hoặc mật khẩu không đúng");
       return;
     }
     router.push(callbackUrl);
@@ -54,7 +54,7 @@ export function LoginForm() {
           id="email"
           type="email"
           autoComplete="email"
-          placeholder="you@example.com"
+          placeholder="ban@example.com"
           {...register("email")}
         />
         {errors.email ? (
@@ -62,7 +62,7 @@ export function LoginForm() {
         ) : null}
       </div>
       <div className="space-y-1.5">
-        <Label htmlFor="password">Password</Label>
+        <Label htmlFor="password">Mật khẩu</Label>
         <Input
           id="password"
           type="password"
@@ -74,7 +74,7 @@ export function LoginForm() {
         ) : null}
       </div>
       <Button type="submit" className="w-full" disabled={pending}>
-        {pending ? "Signing in…" : "Sign in"}
+        {pending ? "Đang đăng nhập…" : "Đăng nhập"}
       </Button>
     </form>
   );

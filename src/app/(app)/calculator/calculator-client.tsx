@@ -112,7 +112,7 @@ export function CalculatorClient() {
       update("entryPrice", formatted);
       toast.success(`${state.symbol} = ${formatted}`);
     },
-    onError: (err) => toast.error(err instanceof Error ? err.message : "Error"),
+    onError: (err) => toast.error(err instanceof Error ? err.message : "Lỗi"),
   });
 
   const calculate = useMutation({
@@ -153,11 +153,11 @@ export function CalculatorClient() {
         body: JSON.stringify(body),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "Failed to calculate");
+      if (!res.ok) throw new Error(data.error ?? "Tính toán thất bại");
       return data as PositionResult;
     },
     onSuccess: setResult,
-    onError: (err) => toast.error(err instanceof Error ? err.message : "Error"),
+    onError: (err) => toast.error(err instanceof Error ? err.message : "Lỗi"),
   });
 
   const onMarketChange = (m: string) => {
@@ -184,11 +184,11 @@ export function CalculatorClient() {
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
             <Calculator className="size-4 text-primary" />
-            Inputs
+            Thông số đầu vào
           </CardTitle>
           <CardDescription>
-            Enter risk amount and stop loss to get the position size in lots
-            and units.
+            Nhập số tiền risk và stop loss để tính khối lượng lệnh ra lots và
+            units.
           </CardDescription>
         </CardHeader>
 
@@ -202,7 +202,7 @@ export function CalculatorClient() {
             {/* ─── FOREX ─────────────────────────────────────────── */}
             <TabsContent value="FOREX" className="mt-4 space-y-4">
               <div className="grid grid-cols-2 gap-3">
-                <Field label="Account Currency">
+                <Field label="Tiền tệ tài khoản">
                   <Select
                     value={state.accountCurrency}
                     onValueChange={(v) => v && update("accountCurrency", v)}
@@ -220,7 +220,7 @@ export function CalculatorClient() {
                   </Select>
                 </Field>
 
-                <Field label="Instrument">
+                <Field label="Cặp tiền">
                   <InstrumentCombobox
                     market="FOREX"
                     value={state.symbol}
@@ -230,7 +230,7 @@ export function CalculatorClient() {
               </div>
 
               <div className="grid grid-cols-2 gap-3">
-                <Field label="Risk Amount">
+                <Field label="Số tiền risk">
                   <Input
                     inputMode="decimal"
                     className="num"
@@ -240,7 +240,7 @@ export function CalculatorClient() {
                   />
                 </Field>
                 {state.stopMode === "pips" ? (
-                  <Field label="Stop Loss Pips">
+                  <Field label="Stop Loss (pips)">
                     <Input
                       inputMode="decimal"
                       className="num"
@@ -250,7 +250,7 @@ export function CalculatorClient() {
                     />
                   </Field>
                 ) : (
-                  <Field label="Stop Loss Price">
+                  <Field label="Stop Loss (giá)">
                     <Input
                       inputMode="decimal"
                       className="num"
@@ -267,13 +267,13 @@ export function CalculatorClient() {
                 onValueChange={(v) => update("stopMode", v as StopMode)}
               >
                 <TabsList className="grid w-full grid-cols-2">
-                  <TabsTrigger value="pips">Stop Loss Pips</TabsTrigger>
-                  <TabsTrigger value="price">Stop Loss Price</TabsTrigger>
+                  <TabsTrigger value="pips">SL theo pips</TabsTrigger>
+                  <TabsTrigger value="price">SL theo giá</TabsTrigger>
                 </TabsList>
               </Tabs>
 
               {state.stopMode === "price" ? (
-                <Field label="Entry Price">
+                <Field label="Giá vào lệnh">
                   <div className="flex gap-2">
                     <Input
                       inputMode="decimal"
@@ -304,7 +304,7 @@ export function CalculatorClient() {
             {/* ─── CRYPTO ────────────────────────────────────────── */}
             <TabsContent value="CRYPTO" className="mt-4 space-y-4">
               <div className="grid grid-cols-2 gap-3">
-                <Field label="Account Currency">
+                <Field label="Tiền tệ tài khoản">
                   <Select
                     value={state.accountCurrency}
                     onValueChange={(v) => v && update("accountCurrency", v)}
@@ -331,7 +331,7 @@ export function CalculatorClient() {
                 </Field>
               </div>
 
-              <Field label="Risk Amount">
+              <Field label="Số tiền risk">
                 <Input
                   inputMode="decimal"
                   className="num"
@@ -341,7 +341,7 @@ export function CalculatorClient() {
                 />
               </Field>
 
-              <Field label="Entry Price">
+              <Field label="Giá vào lệnh">
                 <div className="flex gap-2">
                   <Input
                     inputMode="decimal"
@@ -367,7 +367,7 @@ export function CalculatorClient() {
                 </div>
               </Field>
 
-              <Field label="Stop Loss Price">
+              <Field label="Giá Stop Loss">
                 <Input
                   inputMode="decimal"
                   className="num"
@@ -385,7 +385,7 @@ export function CalculatorClient() {
             disabled={calculate.isPending}
             onClick={() => calculate.mutate()}
           >
-            {calculate.isPending ? "Calculating…" : "Calculate"}
+            {calculate.isPending ? "Đang tính…" : "Tính"}
           </Button>
         </CardContent>
       </Card>
@@ -425,14 +425,14 @@ function ResultPanel({
     return (
       <Card className="bg-card/50">
         <CardHeader>
-          <CardTitle className="text-base">Result</CardTitle>
+          <CardTitle className="text-base">Kết quả</CardTitle>
           <CardDescription>
-            Fill in the form and click <strong>Calculate</strong>.
+            Điền thông tin và bấm <strong>Tính</strong>.
           </CardDescription>
         </CardHeader>
         <CardContent>
           <div className="grid h-72 place-items-center rounded-md border border-dashed text-sm text-muted-foreground">
-            No calculation yet
+            Chưa có kết quả
           </div>
         </CardContent>
       </Card>
@@ -451,14 +451,14 @@ function ResultPanel({
     <Card>
       <CardHeader>
         <div className="flex items-center justify-between">
-          <CardTitle className="text-base">Result</CardTitle>
+          <CardTitle className="text-base">Kết quả</CardTitle>
           <Badge variant="outline" className="font-mono">
             {result.meta.display}
           </Badge>
         </div>
       </CardHeader>
       <CardContent className="space-y-3">
-        <Row label="Risk Amount" value={`${ccy} ${fmt(result.riskAmount)}`} />
+        <Row label="Số tiền risk" value={`${ccy} ${fmt(result.riskAmount)}`} />
         <Separator />
 
         {result.market === "FOREX" ? (
@@ -482,7 +482,7 @@ function ResultPanel({
             />
             <Separator />
             <Row
-              label={`Pip Value per Lot (${ccy})`}
+              label={`Pip Value mỗi Lot (${ccy})`}
               value={fmt(result.pipValuePerLotInAccount ?? 0, 4)}
             />
             {result.stopLossPips != null ? (
@@ -509,7 +509,7 @@ function ResultPanel({
               value={fmt(result.notionalInAccount)}
             />
             <Row
-              label="Stop Loss Distance"
+              label="Khoảng cách Stop Loss"
               value={fmt(result.stopLossDistance, 8)}
             />
           </>

@@ -14,31 +14,32 @@ const API_KEY_DEFINITIONS = [
   {
     kind: "GEMINI",
     label: "Google Gemini",
-    description: "Used for news summarization, on-chain reports, scanner narrative.",
+    description: "Dùng cho tóm tắt tin tức, báo cáo on-chain, narrative scanner.",
     docs: "https://aistudio.google.com/app/apikey",
   },
   {
     kind: "TWELVE_DATA",
     label: "Twelve Data",
-    description: "Free 800 req/day. Forex & crypto prices for the calculator and scanner.",
+    description:
+      "Free 800 req/ngày. Cung cấp giá forex & crypto cho calculator và scanner.",
     docs: "https://twelvedata.com/",
   },
   {
     kind: "CRYPTOPANIC",
     label: "CryptoPanic",
-    description: "Crypto news aggregator. Free tier available.",
+    description: "Aggregator tin tức crypto, có gói free.",
     docs: "https://cryptopanic.com/developers/api/",
   },
   {
     kind: "ETHERSCAN",
     label: "Etherscan",
-    description: "Ethereum on-chain queries: balances, txs, ERC-20 transfers.",
+    description: "Truy vấn on-chain Ethereum: số dư, giao dịch, ERC-20 transfers.",
     docs: "https://etherscan.io/myapikey",
   },
   {
     kind: "BSCSCAN",
     label: "BscScan",
-    description: "BNB Smart Chain on-chain queries.",
+    description: "Truy vấn on-chain BNB Smart Chain.",
     docs: "https://bscscan.com/myapikey",
   },
 ];
@@ -49,15 +50,15 @@ export default async function SettingsPage() {
   return (
     <div className="mx-auto max-w-5xl">
       <PageHeader
-        title="Settings"
-        description="API keys, account preferences, and defaults."
+        title="Cài đặt"
+        description="API keys, thông tin tài khoản và tùy chọn mặc định."
       />
 
       <Tabs defaultValue="keys">
         <TabsList>
           <TabsTrigger value="keys">API keys</TabsTrigger>
-          <TabsTrigger value="account">Account</TabsTrigger>
-          <TabsTrigger value="preferences">Preferences</TabsTrigger>
+          <TabsTrigger value="account">Tài khoản</TabsTrigger>
+          <TabsTrigger value="preferences">Tùy chọn</TabsTrigger>
         </TabsList>
 
         <TabsContent value="keys" className="mt-4">
@@ -65,12 +66,16 @@ export default async function SettingsPage() {
             <CardHeader>
               <CardTitle className="text-base">API keys</CardTitle>
               <CardDescription>
-                Stored AES-encrypted at rest. CRUD UI lands in Phase 1.5 — for
-                now, you can seed via{" "}
+                Lưu ở DB dưới dạng AES-encrypted. Giao diện CRUD sẽ có ở phase
+                1.5 — tạm thời bạn có thể seed qua{" "}
                 <code className="rounded bg-muted px-1.5 py-0.5 text-xs">
                   prisma studio
                 </code>{" "}
-                or env-based seeding.
+                hoặc đặt trong file{" "}
+                <code className="rounded bg-muted px-1.5 py-0.5 text-xs">
+                  .env
+                </code>
+                .
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-3">
@@ -96,7 +101,7 @@ export default async function SettingsPage() {
                     rel="noreferrer"
                     className="text-xs font-medium text-primary hover:underline"
                   >
-                    Get key →
+                    Lấy key →
                   </a>
                 </div>
               ))}
@@ -107,8 +112,10 @@ export default async function SettingsPage() {
         <TabsContent value="account" className="mt-4">
           <Card>
             <CardHeader>
-              <CardTitle className="text-base">Account</CardTitle>
-              <CardDescription>Signed in as your single-user account.</CardDescription>
+              <CardTitle className="text-base">Tài khoản</CardTitle>
+              <CardDescription>
+                Bạn đang đăng nhập với tài khoản cá nhân.
+              </CardDescription>
             </CardHeader>
             <CardContent className="space-y-2 text-sm">
               <div className="flex justify-between border-b pb-2">
@@ -126,10 +133,10 @@ export default async function SettingsPage() {
         <TabsContent value="preferences" className="mt-4">
           <Card>
             <CardHeader>
-              <CardTitle className="text-base">Preferences</CardTitle>
+              <CardTitle className="text-base">Tùy chọn</CardTitle>
               <CardDescription>
-                Default account currency, default lot size unit, theme — coming
-                in Phase 2.
+                Tiền tệ tài khoản mặc định, đơn vị lot, chủ đề giao diện — sẽ
+                có ở giai đoạn tiếp theo.
               </CardDescription>
             </CardHeader>
           </Card>

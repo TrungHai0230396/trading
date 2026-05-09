@@ -57,7 +57,7 @@ export function AppSidebar() {
               Tranding
             </span>
             <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
-              Trading Cockpit
+              Bảng điều khiển giao dịch
             </span>
           </div>
         </Link>
@@ -117,11 +117,11 @@ export function AppSidebar() {
             align="start"
             className="min-w-[14rem]"
           >
-            <DropdownMenuLabel>Account</DropdownMenuLabel>
+            <DropdownMenuLabel>Tài khoản</DropdownMenuLabel>
             <DropdownMenuSeparator />
             <DropdownMenuItem render={<Link href="/settings" />}>
               <User2 className="mr-2 size-4" />
-              Settings
+              Cài đặt
             </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem
@@ -129,7 +129,7 @@ export function AppSidebar() {
               className="text-destructive focus:text-destructive"
             >
               <LogOut className="mr-2 size-4" />
-              Sign out
+              Đăng xuất
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>

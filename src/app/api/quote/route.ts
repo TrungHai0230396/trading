@@ -11,7 +11,7 @@ const querySchema = z.object({
 export async function GET(req: Request) {
   const session = await auth();
   if (!session?.user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    return NextResponse.json({ error: "Chưa đăng nhập" }, { status: 401 });
   }
 
   const url = new URL(req.url);
@@ -21,7 +21,7 @@ export async function GET(req: Request) {
   });
   if (!parsed.success) {
     return NextResponse.json(
-      { error: parsed.error.issues[0]?.message ?? "Invalid query" },
+      { error: parsed.error.issues[0]?.message ?? "Query không hợp lệ" },
       { status: 400 },
     );
   }
@@ -30,7 +30,7 @@ export async function GET(req: Request) {
     const quote = await getPrice(parsed.data.market, parsed.data.symbol);
     return NextResponse.json(quote);
   } catch (err) {
-    const msg = err instanceof Error ? err.message : "Unknown error";
+    const msg = err instanceof Error ? err.message : "Lỗi không xác định";
     return NextResponse.json({ error: msg }, { status: 502 });
   }
 }

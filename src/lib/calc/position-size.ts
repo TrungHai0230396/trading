@@ -80,7 +80,7 @@ function resolveRiskAmount(
 ): number {
   if (riskMode === "fixed") return riskValue;
   if (accountBalance == null || accountBalance <= 0) {
-    warnings.push("Account balance is required for percent-of-account risk.");
+    warnings.push("Cần số dư tài khoản khi tính risk theo %.");
     return 0;
   }
   return (riskValue / 100) * accountBalance;
@@ -113,9 +113,9 @@ export function calcForexPosition(input: ForexInput): PositionSizeResult {
   const warnings: string[] = [];
   const { pair, entryPrice, stopMode, stopValue, takeProfitPrice } = input;
 
-  if (entryPrice <= 0) warnings.push("Entry price must be positive.");
+  if (entryPrice <= 0) warnings.push("Giá vào lệnh phải dương.");
   if (input.quoteToAccountRate <= 0)
-    warnings.push("Quote→account FX rate must be positive.");
+    warnings.push("Tỉ giá quote→account phải dương.");
 
   // Stop loss in price terms.
   let stopPrice: number;
@@ -155,7 +155,7 @@ export function calcForexPosition(input: ForexInput): PositionSizeResult {
   if (stopLossPips > 0 && pipValuePerStdLotAccount > 0) {
     standardLots = riskAmount / (stopLossPips * pipValuePerStdLotAccount);
   } else if (stopLossPips === 0) {
-    warnings.push("Stop loss distance is zero.");
+    warnings.push("Khoảng cách stop loss bằng 0.");
   }
 
   const units = standardLots * LOT_UNITS.standard;
@@ -199,9 +199,9 @@ export function calcCryptoPosition(input: CryptoInput): PositionSizeResult {
   const warnings: string[] = [];
   const { entryPrice, stopPrice, takeProfitPrice } = input;
 
-  if (entryPrice <= 0) warnings.push("Entry price must be positive.");
+  if (entryPrice <= 0) warnings.push("Giá vào lệnh phải dương.");
   if (input.quoteToAccountRate <= 0)
-    warnings.push("Quote→account rate must be positive.");
+    warnings.push("Tỉ giá quote→account phải dương.");
 
   const { distance, rr, tpDistance } = rrFromPrices(
     input.direction,
@@ -225,7 +225,7 @@ export function calcCryptoPosition(input: CryptoInput): PositionSizeResult {
   if (distance > 0 && riskAmountInQuote > 0) {
     units = riskAmountInQuote / distance;
   } else if (distance === 0) {
-    warnings.push("Stop loss distance is zero.");
+    warnings.push("Khoảng cách stop loss bằng 0.");
   }
 
   const notionalInQuote = units * entryPrice;

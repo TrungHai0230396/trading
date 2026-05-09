@@ -16,7 +16,7 @@ function registrationAllowed(): boolean {
 export async function POST(req: Request) {
   if (!registrationAllowed()) {
     return NextResponse.json(
-      { error: "Registration is disabled." },
+      { error: "Tính năng đăng ký đang bị tắt." },
       { status: 403 },
     );
   }
@@ -25,13 +25,13 @@ export async function POST(req: Request) {
   try {
     payload = await req.json();
   } catch {
-    return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
+    return NextResponse.json({ error: "JSON không hợp lệ" }, { status: 400 });
   }
 
   const parsed = schema.safeParse(payload);
   if (!parsed.success) {
     return NextResponse.json(
-      { error: parsed.error.issues[0]?.message ?? "Invalid input" },
+      { error: parsed.error.issues[0]?.message ?? "Dữ liệu không hợp lệ" },
       { status: 400 },
     );
   }
@@ -40,7 +40,7 @@ export async function POST(req: Request) {
   const existing = await db.user.findUnique({ where: { email } });
   if (existing) {
     return NextResponse.json(
-      { error: "Email is already registered." },
+      { error: "Email này đã được đăng ký." },
       { status: 409 },
     );
   }

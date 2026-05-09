@@ -6,13 +6,13 @@ export default function ScannerPage() {
   return (
     <div className="mx-auto max-w-7xl">
       <PageHeader
-        title="Multi-Timeframe Scanner"
-        description="Scan top coins/forex with combined RSI/MACD/EMA across timeframes — only flagging assets where signals align."
+        title="Quét đa khung thời gian"
+        description="Quét top coin/forex bằng RSI/MACD/EMA kết hợp nhiều khung thời gian — chỉ báo tín hiệu khi các TF cùng đồng thuận."
       />
       <EmptyState
         icon={Radar}
-        title="Coming in Phase 4"
-        description="Port the triple-timeframe RSI alignment logic from the existing bots and add MACD/EMA modes."
+        title="Đang phát triển"
+        description="Tôi sẽ port logic 3-TF alignment từ bot RSI hiện tại và bổ sung MACD/EMA ở giai đoạn tiếp theo."
       />
     </div>
   );

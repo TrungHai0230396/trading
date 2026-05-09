@@ -6,13 +6,13 @@ export default function JournalPage() {
   return (
     <div className="mx-auto max-w-7xl">
       <PageHeader
-        title="Trading Journal"
-        description="Log trades, attach screenshots, tag setups & emotions, review R-multiples."
+        title="Nhật ký giao dịch"
+        description="Ghi lệnh, đính kèm screenshot, gắn tag setup & cảm xúc, theo dõi R-multiple."
       />
       <EmptyState
         icon={BookOpenText}
-        title="Coming in Phase 3"
-        description="Journal CRUD, filters, stats and screenshot uploads will be implemented next."
+        title="Đang phát triển"
+        description="CRUD nhật ký, lọc, thống kê và upload screenshot sẽ có ở giai đoạn tiếp theo."
       />
     </div>
   );

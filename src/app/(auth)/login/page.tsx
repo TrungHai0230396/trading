@@ -6,21 +6,21 @@ export default function LoginPage() {
   return (
     <div className="space-y-6">
       <div className="space-y-1">
-        <h1 className="text-2xl font-semibold tracking-tight">Welcome back</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">Chào mừng trở lại</h1>
         <p className="text-sm text-muted-foreground">
-          Sign in to your trading cockpit.
+          Đăng nhập vào bảng điều khiển giao dịch của bạn.
         </p>
       </div>
       <Suspense fallback={<div className="h-[260px]" />}>
         <LoginForm />
       </Suspense>
       <p className="text-xs text-muted-foreground">
-        First time?{" "}
+        Lần đầu sử dụng?{" "}
         <Link
           href="/register"
           className="font-medium text-primary hover:underline"
         >
-          Create an account
+          Tạo tài khoản
         </Link>
       </p>
     </div>

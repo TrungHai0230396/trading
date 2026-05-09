@@ -6,13 +6,13 @@ export default function NewsPage() {
   return (
     <div className="mx-auto max-w-7xl">
       <PageHeader
-        title="News & AI"
-        description="Aggregated crypto / macro news with Gemini-powered summary, sentiment & impact tagging."
+        title="Tin tức & AI"
+        description="Tin tức crypto/macro tổng hợp, kèm tóm tắt + sentiment + impact do Gemini phân tích."
       />
       <EmptyState
         icon={Newspaper}
-        title="Coming in Phase 5"
-        description="CryptoPanic feed + Gemini summarization pipeline will be wired up here."
+        title="Đang phát triển"
+        description="Sẽ tích hợp CryptoPanic feed và pipeline tóm tắt bằng Gemini."
       />
     </div>
   );

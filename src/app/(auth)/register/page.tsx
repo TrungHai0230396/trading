@@ -6,10 +6,10 @@ export default function RegisterPage() {
     <div className="space-y-6">
       <div className="space-y-1">
         <h1 className="text-2xl font-semibold tracking-tight">
-          Create your account
+          Tạo tài khoản
         </h1>
         <p className="text-sm text-muted-foreground">
-          One-time setup. Disable registration later via{" "}
+          Đăng ký một lần. Có thể tắt sau qua{" "}
           <code className="rounded bg-muted px-1.5 py-0.5 text-xs">
             ALLOW_REGISTRATION=false
           </code>
@@ -18,12 +18,12 @@ export default function RegisterPage() {
       </div>
       <RegisterForm />
       <p className="text-xs text-muted-foreground">
-        Already have an account?{" "}
+        Đã có tài khoản?{" "}
         <Link
           href="/login"
           className="font-medium text-primary hover:underline"
         >
-          Sign in
+          Đăng nhập
         </Link>
       </p>
     </div>

@@ -27,7 +27,7 @@ export function InstrumentCombobox({
   value,
   onChange,
   className,
-  placeholder = "Select instrument…",
+  placeholder = "Chọn instrument…",
 }: {
   market: "FOREX" | "CRYPTO";
   value: string;
@@ -96,16 +96,16 @@ export function InstrumentCombobox({
           <CommandInput
             placeholder={
               market === "CRYPTO"
-                ? "Search or type a symbol (e.g. BTCUSDT)…"
-                : "Search forex pair…"
+                ? "Tìm hoặc gõ symbol (vd: BTCUSDT)…"
+                : "Tìm cặp forex…"
             }
             value={query}
             onValueChange={setQuery}
           />
           <CommandList>
-            <CommandEmpty>No instrument found.</CommandEmpty>
+            <CommandEmpty>Không tìm thấy.</CommandEmpty>
             {customAvailable ? (
-              <CommandGroup heading="Use custom symbol">
+              <CommandGroup heading="Dùng symbol tùy chọn">
                 <CommandItem
                   value={`__custom__${trimmedQuery}`}
                   onSelect={() => {
@@ -114,7 +114,7 @@ export function InstrumentCombobox({
                   }}
                 >
                   <Search className="mr-2 size-4" />
-                  Use{" "}
+                  Dùng{" "}
                   <span className="ml-1 font-mono">{trimmedQuery}</span>
                 </CommandItem>
               </CommandGroup>

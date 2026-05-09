@@ -16,7 +16,7 @@ export default function AuthLayout({
             <div className="leading-tight">
               <div className="text-sm font-semibold">Tranding</div>
               <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                Trading Cockpit
+                Bảng điều khiển giao dịch
               </div>
             </div>
           </div>
@@ -27,11 +27,11 @@ export default function AuthLayout({
         <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_right,oklch(0.78_0.17_159/0.12),transparent_60%)]" />
         <div className="relative flex h-full flex-col items-center justify-center gap-4 px-12 text-center">
           <h2 className="text-3xl font-semibold tracking-tight">
-            Trade with intent.
+            Giao dịch có chủ đích.
           </h2>
           <p className="max-w-md text-sm text-muted-foreground">
-            Position sizing, journal, multi-timeframe scanning, AI-assisted news
-            and on-chain insight — in one place.
+            Tính khối lượng lệnh, nhật ký, quét đa timeframe, tin tức AI tóm
+            tắt và phân tích on-chain — tất cả trong một chỗ.
           </p>
         </div>
       </div>

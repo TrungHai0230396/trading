@@ -4,25 +4,25 @@ import { EmptyState } from "@/components/empty-state";
 import { Activity, BookOpenText, Calculator, Newspaper, Radar, TrendingUp } from "lucide-react";
 
 const stats = [
-  { label: "Today P/L", value: "—", hint: "Connect journal" },
-  { label: "Open Trades", value: "0", hint: "No open positions" },
-  { label: "Win Rate (30d)", value: "—", hint: "Need trade history" },
-  { label: "Avg R-multiple", value: "—", hint: "Need closed trades" },
+  { label: "P/L hôm nay", value: "—", hint: "Chưa có nhật ký" },
+  { label: "Lệnh đang mở", value: "0", hint: "Không có lệnh mở" },
+  { label: "Win rate (30 ngày)", value: "—", hint: "Cần lịch sử giao dịch" },
+  { label: "R-multiple TB", value: "—", hint: "Cần lệnh đã đóng" },
 ];
 
 const quickLinks = [
-  { href: "/calculator", icon: Calculator, label: "Position Size", desc: "Risk-based sizing" },
-  { href: "/journal", icon: BookOpenText, label: "Journal", desc: "Log a trade" },
-  { href: "/scanner", icon: Radar, label: "Scanner", desc: "Multi-TF signals" },
-  { href: "/news", icon: Newspaper, label: "News & AI", desc: "Today's headlines" },
+  { href: "/calculator", icon: Calculator, label: "Tính khối lượng", desc: "Tính lot theo risk" },
+  { href: "/journal", icon: BookOpenText, label: "Nhật ký", desc: "Ghi lệnh mới" },
+  { href: "/scanner", icon: Radar, label: "Quét đa khung", desc: "Tín hiệu đa TF" },
+  { href: "/news", icon: Newspaper, label: "Tin tức & AI", desc: "Tin nóng hôm nay" },
 ];
 
 export default function DashboardPage() {
   return (
     <div className="mx-auto max-w-7xl">
       <PageHeader
-        title="Dashboard"
-        description="A bird's-eye view of your trading day. Stats populate as you log trades and run scans."
+        title="Tổng quan"
+        description="Cái nhìn toàn cảnh về phiên giao dịch của bạn. Số liệu sẽ cập nhật khi bạn ghi nhật ký và chạy quét."
       />
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
@@ -46,25 +46,26 @@ export default function DashboardPage() {
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-base">
               <Activity className="size-4 text-primary" />
-              Equity curve
+              Đường equity
             </CardTitle>
             <CardDescription>
-              Closed-trade P/L over time. Will render once you log trades.
+              P/L tích lũy của các lệnh đã đóng. Sẽ hiển thị sau khi bạn ghi
+              nhật ký.
             </CardDescription>
           </CardHeader>
           <CardContent>
             <EmptyState
               icon={TrendingUp}
-              title="No trade history yet"
-              description="Log your first trade in the Journal to start tracking performance."
+              title="Chưa có lịch sử giao dịch"
+              description="Ghi lệnh đầu tiên ở Nhật ký để bắt đầu theo dõi hiệu suất."
             />
           </CardContent>
         </Card>
 
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Quick actions</CardTitle>
-            <CardDescription>Jump into common tasks.</CardDescription>
+            <CardTitle className="text-base">Truy cập nhanh</CardTitle>
+            <CardDescription>Mở nhanh các tác vụ thường dùng.</CardDescription>
           </CardHeader>
           <CardContent className="grid gap-2">
             {quickLinks.map(({ href, icon: Icon, label, desc }) => (

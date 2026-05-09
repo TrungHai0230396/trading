@@ -6,13 +6,13 @@ export default function OnchainPage() {
   return (
     <div className="mx-auto max-w-7xl">
       <PageHeader
-        title="On-chain Analysis"
-        description="Paste a wallet, token or tx — fetch on-chain data (ETH/BSC) and let Gemini draft a risk/flow report."
+        title="Phân tích On-chain"
+        description="Dán địa chỉ ví/token/tx — lấy dữ liệu on-chain (ETH/BSC) và để Gemini viết báo cáo dòng tiền/risk."
       />
       <EmptyState
         icon={Boxes}
-        title="Coming in Phase 6"
-        description="Etherscan/BscScan + DefiLlama integrations and the AI report pipeline will live here."
+        title="Đang phát triển"
+        description="Sẽ tích hợp Etherscan/BscScan + DefiLlama và pipeline AI tạo báo cáo."
       />
     </div>
   );

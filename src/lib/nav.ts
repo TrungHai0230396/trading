@@ -18,56 +18,56 @@ export type NavItem = {
 
 export const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
   {
-    label: "Cockpit",
+    label: "Bảng điều khiển",
     items: [
       {
-        label: "Dashboard",
+        label: "Tổng quan",
         href: "/",
         icon: LayoutDashboard,
-        description: "Overview & today's activity",
+        description: "Tổng hợp số liệu & hoạt động trong ngày",
       },
       {
-        label: "Position Size",
+        label: "Tính khối lượng",
         href: "/calculator",
         icon: Calculator,
-        description: "Risk-based lot sizing",
+        description: "Tính lot theo số tiền risk",
       },
       {
-        label: "Journal",
+        label: "Nhật ký giao dịch",
         href: "/journal",
         icon: BookOpenText,
-        description: "Trade log + stats",
+        description: "Ghi lệnh + thống kê",
       },
     ],
   },
   {
-    label: "Analysis",
+    label: "Phân tích",
     items: [
       {
-        label: "Multi-TF Scanner",
+        label: "Quét đa khung",
         href: "/scanner",
         icon: Radar,
-        description: "RSI/MACD across timeframes",
+        description: "RSI/MACD/EMA trên nhiều timeframe",
       },
       {
-        label: "News & AI",
+        label: "Tin tức & AI",
         href: "/news",
         icon: Newspaper,
-        description: "Aggregated + AI-summarized",
+        description: "Tin tổng hợp + AI tóm tắt",
       },
       {
         label: "On-chain",
         href: "/onchain",
         icon: Boxes,
-        description: "Wallet/token AI analysis",
+        description: "Phân tích ví/token bằng AI",
       },
     ],
   },
   {
-    label: "System",
+    label: "Hệ thống",
     items: [
       {
-        label: "Settings",
+        label: "Cài đặt",
         href: "/settings",
         icon: Settings,
       },

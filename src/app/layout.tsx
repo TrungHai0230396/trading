@@ -15,9 +15,9 @@ const jetbrainsMono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Tranding — Trading Cockpit",
+  title: "Tranding — Bảng điều khiển giao dịch",
   description:
-    "Position sizing, journal, multi-timeframe scanner, AI news & on-chain analysis.",
+    "Tính khối lượng lệnh, nhật ký, quét đa khung thời gian, tin tức AI và phân tích on-chain.",
 };
 
 export default function RootLayout({
@@ -25,7 +25,7 @@ export default function RootLayout({
 }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html
-      lang="en"
+      lang="vi"
       suppressHydrationWarning
       className={`${inter.variable} ${jetbrainsMono.variable} h-full antialiased`}
     >
