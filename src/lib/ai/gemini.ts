@@ -18,8 +18,8 @@ export class GeminiError extends Error {
 }
 
 // Google retired the 1.5 family — use 2.5 as fallback when 2.0 is throttled/missing.
-const PRIMARY_MODEL = "gemini-2.5-flash";
-const FALLBACK_MODEL = "gemini-2.0-flash";
+export const PRIMARY_MODEL = "gemini-2.5-flash";
+export const FALLBACK_MODEL = "gemini-2.0-flash";
 
 export type Sentiment = "bullish" | "bearish" | "neutral";
 export type Impact = "high" | "medium" | "low";
@@ -67,7 +67,7 @@ CHỈ trả về JSON đúng định dạng sau, KHÔNG kèm văn bản giải t
 {"summary":"...","sentiment":"bullish|bearish|neutral","impact":"high|medium|low","tags":["..."]}`;
 
 /** Strip ```json fences and any leading/trailing prose; return the JSON slice. */
-function extractJson(raw: string): string {
+export function extractJson(raw: string): string {
   let s = raw.trim();
   // Strip ```json or ``` fences
   s = s.replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "");
@@ -133,7 +133,7 @@ function parseModelOutput(raw: string): Omit<SummaryResult, "aiModel"> {
   };
 }
 
-function isModelNotFoundError(err: unknown): boolean {
+export function isModelNotFoundError(err: unknown): boolean {
   const msg = err instanceof Error ? err.message.toLowerCase() : "";
   return (
     msg.includes("not found") ||
@@ -157,6 +157,51 @@ async function callGemini(
   });
   const result = await model.generateContent(prompt);
   return result.response.text();
+}
+
+/**
+ * Generic JSON-mode call with primary→fallback model handling. Used by
+ * other AI features (e.g. insights) that need their own system prompt.
+ * Throws GeminiError on misconfiguration / non-recoverable failures.
+ *
+ * Returns `{ raw, modelId }` where `modelId` is the model that actually
+ * answered (post-fallback).
+ */
+export async function callGeminiJson(opts: {
+  systemInstruction: string;
+  prompt: string;
+  temperature?: number;
+}): Promise<{ raw: string; modelId: string }> {
+  const callOnce = async (modelId: string) => {
+    const model = client().getGenerativeModel({
+      model: modelId,
+      systemInstruction: opts.systemInstruction,
+      generationConfig: {
+        temperature: opts.temperature ?? 0.2,
+        responseMimeType: "application/json",
+      },
+    });
+    const result = await model.generateContent(opts.prompt);
+    return result.response.text();
+  };
+
+  let modelId = PRIMARY_MODEL;
+  let raw: string;
+  try {
+    raw = await callOnce(PRIMARY_MODEL);
+  } catch (err) {
+    if (isModelNotFoundError(err)) {
+      modelId = FALLBACK_MODEL;
+      raw = await callOnce(FALLBACK_MODEL);
+    } else {
+      throw err instanceof GeminiError
+        ? err
+        : new GeminiError(
+            err instanceof Error ? err.message : "Gemini lỗi không xác định",
+          );
+    }
+  }
+  return { raw, modelId };
 }
 
 /** Build the user-prompt block for one article. */
