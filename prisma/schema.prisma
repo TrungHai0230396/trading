@@ -1,0 +1,325 @@
+// Tranding — trading cockpit schema
+// MySQL via Prisma. Generated client output: src/generated/prisma
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "mysql"
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// Auth & user
+// ──────────────────────────────────────────────────────────────────────
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  name         String?
+  passwordHash String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  accounts       TradingAccount[]
+  trades         TradeJournal[]
+  watchlistItems WatchlistSymbol[]
+  apiKeys        ApiKey[]
+  settings       AppSetting[]
+  newsArticles   NewsArticle[]
+  onchainReports OnchainReport[]
+  analysisRuns   AnalysisRun[]
+  strategies     Strategy[]
+  tags           Tag[]
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// Trading account & journal
+// ──────────────────────────────────────────────────────────────────────
+
+enum MarketType {
+  FOREX
+  CRYPTO
+  STOCK
+  COMMODITY
+  INDEX
+  OTHER
+}
+
+enum TradeDirection {
+  LONG
+  SHORT
+}
+
+enum TradeStatus {
+  OPEN
+  CLOSED
+  CANCELED
+}
+
+model TradingAccount {
+  id              String   @id @default(cuid())
+  userId          String
+  name            String
+  broker          String?
+  currency        String   @default("USD")
+  startingBalance Decimal  @default(0) @db.Decimal(20, 4)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  user   User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  trades TradeJournal[]
+
+  @@index([userId])
+}
+
+model Strategy {
+  id          String   @id @default(cuid())
+  userId      String
+  name        String
+  description String?  @db.Text
+  createdAt   DateTime @default(now())
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  trades TradeJournal[]
+
+  @@unique([userId, name])
+}
+
+model Tag {
+  id     String            @id @default(cuid())
+  userId String
+  name   String
+  color  String?
+  user   User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  trades TradeJournalTag[]
+
+  @@unique([userId, name])
+}
+
+model TradeJournal {
+  id         String  @id @default(cuid())
+  userId     String
+  accountId  String?
+  strategyId String?
+
+  symbol    String
+  market    MarketType     @default(FOREX)
+  direction TradeDirection
+  status    TradeStatus    @default(OPEN)
+  timeframe String?
+
+  entryPrice Decimal  @db.Decimal(20, 8)
+  exitPrice  Decimal? @db.Decimal(20, 8)
+  stopLoss   Decimal? @db.Decimal(20, 8)
+  takeProfit Decimal? @db.Decimal(20, 8)
+  lotSize    Decimal  @db.Decimal(20, 8)
+  riskAmount Decimal? @db.Decimal(20, 4)
+  rMultiple  Decimal? @db.Decimal(10, 4)
+  pnl        Decimal? @db.Decimal(20, 4)
+  feesAmount Decimal? @db.Decimal(20, 4)
+
+  openedAt DateTime
+  closedAt DateTime?
+
+  setup    String? @db.Text
+  notes    String? @db.Text
+  mistakes String? @db.Text
+  emotion  String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user        User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  account     TradingAccount?   @relation(fields: [accountId], references: [id], onDelete: SetNull)
+  strategy    Strategy?         @relation(fields: [strategyId], references: [id], onDelete: SetNull)
+  screenshots TradeScreenshot[]
+  tags        TradeJournalTag[]
+
+  @@index([userId, openedAt])
+  @@index([userId, status])
+  @@index([symbol])
+}
+
+model TradeJournalTag {
+  tradeId String
+  tagId   String
+  trade   TradeJournal @relation(fields: [tradeId], references: [id], onDelete: Cascade)
+  tag     Tag          @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([tradeId, tagId])
+}
+
+model TradeScreenshot {
+  id        String   @id @default(cuid())
+  tradeId   String
+  url       String   @db.Text
+  caption   String?
+  kind      String? // before, during, after
+  createdAt DateTime @default(now())
+
+  trade TradeJournal @relation(fields: [tradeId], references: [id], onDelete: Cascade)
+
+  @@index([tradeId])
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// Watchlist & analysis (multi-TF scanner)
+// ──────────────────────────────────────────────────────────────────────
+
+model WatchlistSymbol {
+  id        String     @id @default(cuid())
+  userId    String
+  symbol    String
+  market    MarketType @default(CRYPTO)
+  exchange  String? // binance, mt5...
+  notes     String?    @db.Text
+  sortOrder Int        @default(0)
+  createdAt DateTime   @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, symbol, market])
+  @@index([userId])
+}
+
+model AnalysisRun {
+  id         String     @id @default(cuid())
+  userId     String
+  name       String?
+  market     MarketType
+  symbols    Json // array of symbol strings
+  timeframes Json // array of TF strings: ["1h","4h","1d"]
+  indicators Json // ["rsi-ema-wma", "macd"...]
+  config     Json? // { rsiPeriod:14, emaPeriod:9, ... }
+  createdAt  DateTime   @default(now())
+
+  user    User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  results AnalysisResult[]
+
+  @@index([userId, createdAt])
+}
+
+model AnalysisResult {
+  id         String   @id @default(cuid())
+  runId      String
+  symbol     String
+  timeframe  String
+  signal     String // BULLISH | BEARISH | NEUTRAL
+  score      Float? // 0-100
+  indicators Json // raw indicator values per TF
+  computedAt DateTime @default(now())
+
+  run AnalysisRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@index([runId, signal])
+  @@index([symbol, timeframe])
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// News + AI
+// ──────────────────────────────────────────────────────────────────────
+
+model NewsArticle {
+  id          String   @id @default(cuid())
+  userId      String?
+  source      String
+  externalId  String?  @unique
+  title       String   @db.VarChar(512)
+  url         String   @db.Text
+  publishedAt DateTime
+  rawContent  String?  @db.LongText
+  // AI-derived fields
+  summary     String?  @db.Text
+  sentiment   String? // bullish | bearish | neutral
+  impact      String? // high | medium | low
+  tags        Json? // ["BTC","ETF","macro"]
+  aiModel     String?
+  createdAt   DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([publishedAt])
+  @@index([source])
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// On-chain
+// ──────────────────────────────────────────────────────────────────────
+
+enum OnchainTargetType {
+  WALLET
+  TOKEN
+  TRANSACTION
+}
+
+enum OnchainChain {
+  ETH
+  BSC
+  ARBITRUM
+  POLYGON
+  SOLANA
+  OTHER
+}
+
+model OnchainReport {
+  id         String            @id @default(cuid())
+  userId     String
+  chain      OnchainChain
+  targetType OnchainTargetType
+  target     String            @db.VarChar(128) // address / tx hash
+  rawData    Json?
+  summary    String?           @db.Text
+  riskLevel  String? // low | medium | high
+  insights   Json?
+  aiModel    String?
+  createdAt  DateTime          @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([chain, target])
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// Settings & API keys
+// ──────────────────────────────────────────────────────────────────────
+
+enum ApiKeyKind {
+  GEMINI
+  TWELVE_DATA
+  CRYPTOPANIC
+  ETHERSCAN
+  BSCSCAN
+  COINGECKO
+  CUSTOM
+}
+
+model ApiKey {
+  id        String     @id @default(cuid())
+  userId    String
+  kind      ApiKeyKind
+  label     String?
+  encrypted String     @db.Text // AES-encrypted value
+  isActive  Boolean    @default(true)
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, kind, label])
+  @@index([userId])
+}
+
+model AppSetting {
+  id        String   @id @default(cuid())
+  userId    String
+  key       String
+  value     Json
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, key])
+}
