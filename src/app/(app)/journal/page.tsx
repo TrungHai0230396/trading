@@ -1,19 +1,23 @@
+import Link from "next/link";
+import { Plus } from "lucide-react";
 import { PageHeader } from "@/components/page-header";
-import { EmptyState } from "@/components/empty-state";
-import { BookOpenText } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { JournalClient } from "./journal-client";
 
 export default function JournalPage() {
   return (
     <div className="mx-auto max-w-7xl">
       <PageHeader
         title="Nhật ký giao dịch"
-        description="Ghi lệnh, đính kèm screenshot, gắn tag setup & cảm xúc, theo dõi R-multiple."
+        description="Ghi lệnh, đính kèm setup, gắn tag, theo dõi P/L và R-multiple."
+        actions={
+          <Button render={<Link href="/journal/new" />}>
+            <Plus className="size-4" />
+            Lệnh mới
+          </Button>
+        }
       />
-      <EmptyState
-        icon={BookOpenText}
-        title="Đang phát triển"
-        description="CRUD nhật ký, lọc, thống kê và upload screenshot sẽ có ở giai đoạn tiếp theo."
-      />
+      <JournalClient />
     </div>
   );
 }
