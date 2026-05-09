@@ -3,9 +3,15 @@
 import * as React from "react";
 import { useMutation } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { ArrowDownRight, ArrowUpRight, Calculator, RefreshCw } from "lucide-react";
+import { Calculator, RefreshCw } from "lucide-react";
 
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -24,7 +30,7 @@ import { ACCOUNT_CURRENCIES, findForexPair } from "@/lib/calc/forex-pairs";
 import { cn } from "@/lib/utils";
 
 // ──────────────────────────────────────────────────────────────────────
-// Result type (mirrors API)
+// Types (mirror /api/calc/position-size response)
 // ──────────────────────────────────────────────────────────────────────
 type PositionResult = {
   market: "FOREX" | "CRYPTO";
@@ -40,9 +46,6 @@ type PositionResult = {
   };
   notional: number;
   notionalInAccount: number;
-  rrRatio?: number;
-  takeProfitPips?: number;
-  expectedProfit?: number;
   warnings: string[];
   meta: {
     symbol: string;
@@ -53,42 +56,32 @@ type PositionResult = {
   };
 };
 
-// ──────────────────────────────────────────────────────────────────────
-// Shared form state
-// ──────────────────────────────────────────────────────────────────────
-type Direction = "LONG" | "SHORT";
-type RiskMode = "percent" | "fixed";
 type StopMode = "pips" | "price";
 
 type FormState = {
   market: "FOREX" | "CRYPTO";
   accountCurrency: string;
   symbol: string;
-  direction: Direction;
-  entryPrice: string;
-  stopMode: StopMode;          // FX
-  stopValue: string;            // FX
-  stopPrice: string;            // CRYPTO
-  takeProfitPrice: string;
-  riskMode: RiskMode;
-  riskValue: string;
-  accountBalance: string;
+  riskAmount: string;
+  stopMode: StopMode;       // FX: pips | price; Crypto: always price
+  stopPips: string;         // FX (pips mode)
+  entryPrice: string;       // FX (price mode) + Crypto
+  stopPrice: string;        // FX (price mode) + Crypto
 };
 
 const INITIAL_STATE: FormState = {
   market: "FOREX",
   accountCurrency: "USD",
-  symbol: "EURUSD",
-  direction: "LONG",
-  entryPrice: "",
+  symbol: "GBPUSD",
+  riskAmount: "5",
   stopMode: "pips",
-  stopValue: "20",
+  stopPips: "51.2",
+  entryPrice: "",
   stopPrice: "",
-  takeProfitPrice: "",
-  riskMode: "percent",
-  riskValue: "1",
-  accountBalance: "10000",
 };
+
+// Allow comma decimals (European style) in number inputs.
+const num = (s: string): number => Number(String(s).replace(",", "."));
 
 // ──────────────────────────────────────────────────────────────────────
 // Component
@@ -99,7 +92,6 @@ export function CalculatorClient() {
   const update = <K extends keyof FormState>(key: K, value: FormState[K]) =>
     setState((s) => ({ ...s, [key]: value }));
 
-  // Live price fetch
   const fetchPrice = useMutation({
     mutationFn: async () => {
       const url = new URL("/api/quote", window.location.origin);
@@ -117,13 +109,12 @@ export function CalculatorClient() {
         state.market === "FOREX"
           ? price.toFixed(findForexPair(state.symbol)?.digits ?? 5)
           : String(price);
-      setState((s) => ({ ...s, entryPrice: formatted }));
-      toast.success(`Latest ${state.symbol} = ${formatted}`);
+      update("entryPrice", formatted);
+      toast.success(`${state.symbol} = ${formatted}`);
     },
     onError: (err) => toast.error(err instanceof Error ? err.message : "Error"),
   });
 
-  // Calculate
   const calculate = useMutation({
     mutationFn: async () => {
       const body =
@@ -132,34 +123,28 @@ export function CalculatorClient() {
               market: "FOREX",
               accountCurrency: state.accountCurrency,
               symbol: state.symbol,
-              direction: state.direction,
-              entryPrice: Number(state.entryPrice),
+              direction: "LONG",
+              entryPrice:
+                state.stopMode === "price"
+                  ? num(state.entryPrice)
+                  : 1, // dummy; only used in price mode
               stopMode: state.stopMode,
-              stopValue: Number(state.stopValue),
-              takeProfitPrice: state.takeProfitPrice
-                ? Number(state.takeProfitPrice)
-                : undefined,
-              riskMode: state.riskMode,
-              riskValue: Number(state.riskValue),
-              accountBalance: state.accountBalance
-                ? Number(state.accountBalance)
-                : undefined,
+              stopValue:
+                state.stopMode === "pips"
+                  ? num(state.stopPips)
+                  : num(state.stopPrice),
+              riskMode: "fixed",
+              riskValue: num(state.riskAmount),
             }
           : {
               market: "CRYPTO",
               accountCurrency: state.accountCurrency,
               symbol: state.symbol,
-              direction: state.direction,
-              entryPrice: Number(state.entryPrice),
-              stopPrice: Number(state.stopPrice),
-              takeProfitPrice: state.takeProfitPrice
-                ? Number(state.takeProfitPrice)
-                : undefined,
-              riskMode: state.riskMode,
-              riskValue: Number(state.riskValue),
-              accountBalance: state.accountBalance
-                ? Number(state.accountBalance)
-                : undefined,
+              direction: "LONG",
+              entryPrice: num(state.entryPrice),
+              stopPrice: num(state.stopPrice),
+              riskMode: "fixed",
+              riskValue: num(state.riskAmount),
             };
 
       const res = await fetch("/api/calc/position-size", {
@@ -175,27 +160,26 @@ export function CalculatorClient() {
     onError: (err) => toast.error(err instanceof Error ? err.message : "Error"),
   });
 
-  // ──────────────────────────────────────────────────────────────────
-  // Tab switch resets symbol default
-  // ──────────────────────────────────────────────────────────────────
   const onMarketChange = (m: string) => {
     const market = m as "FOREX" | "CRYPTO";
-    setState((s) => ({
-      ...s,
+    setState({
       market,
-      symbol: market === "FOREX" ? "EURUSD" : "BTCUSDT",
-      stopMode: market === "FOREX" ? "pips" : s.stopMode,
+      accountCurrency: state.accountCurrency,
+      symbol: market === "FOREX" ? "GBPUSD" : "BTCUSDT",
+      riskAmount: state.riskAmount,
+      stopMode: market === "FOREX" ? "pips" : "price",
+      stopPips: "20",
       entryPrice: "",
-      stopValue: market === "FOREX" ? "20" : s.stopValue,
       stopPrice: "",
-      takeProfitPrice: "",
-    }));
+    });
     setResult(null);
   };
 
+  // ───────────────────────────────────────────────────────────────────
+  // Render
+  // ───────────────────────────────────────────────────────────────────
   return (
     <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-      {/* ─── Form ───────────────────────────────────────── */}
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
@@ -203,21 +187,22 @@ export function CalculatorClient() {
             Inputs
           </CardTitle>
           <CardDescription>
-            Enter your trade parameters. The live price button fills entry from
-            the market.
+            Enter risk amount and stop loss to get the position size in lots
+            and units.
           </CardDescription>
         </CardHeader>
 
-        <CardContent className="space-y-5">
+        <CardContent className="space-y-4">
           <Tabs value={state.market} onValueChange={onMarketChange}>
             <TabsList className="grid w-full grid-cols-2">
               <TabsTrigger value="FOREX">Forex</TabsTrigger>
               <TabsTrigger value="CRYPTO">Crypto</TabsTrigger>
             </TabsList>
 
+            {/* ─── FOREX ─────────────────────────────────────────── */}
             <TabsContent value="FOREX" className="mt-4 space-y-4">
               <div className="grid grid-cols-2 gap-3">
-                <FieldGroup label="Account currency">
+                <Field label="Account Currency">
                   <Select
                     value={state.accountCurrency}
                     onValueChange={(v) => v && update("accountCurrency", v)}
@@ -233,61 +218,93 @@ export function CalculatorClient() {
                       ))}
                     </SelectContent>
                   </Select>
-                </FieldGroup>
+                </Field>
 
-                <FieldGroup label="Pair">
+                <Field label="Instrument">
                   <InstrumentCombobox
                     market="FOREX"
                     value={state.symbol}
                     onChange={(v) => update("symbol", v)}
                   />
-                </FieldGroup>
+                </Field>
               </div>
 
-              <DirectionToggle
-                value={state.direction}
-                onChange={(v) => update("direction", v)}
-              />
+              <div className="grid grid-cols-2 gap-3">
+                <Field label="Risk Amount">
+                  <Input
+                    inputMode="decimal"
+                    className="num"
+                    value={state.riskAmount}
+                    onChange={(e) => update("riskAmount", e.target.value)}
+                    placeholder="5"
+                  />
+                </Field>
+                {state.stopMode === "pips" ? (
+                  <Field label="Stop Loss Pips">
+                    <Input
+                      inputMode="decimal"
+                      className="num"
+                      value={state.stopPips}
+                      onChange={(e) => update("stopPips", e.target.value)}
+                      placeholder="20"
+                    />
+                  </Field>
+                ) : (
+                  <Field label="Stop Loss Price">
+                    <Input
+                      inputMode="decimal"
+                      className="num"
+                      value={state.stopPrice}
+                      onChange={(e) => update("stopPrice", e.target.value)}
+                      placeholder="1.0820"
+                    />
+                  </Field>
+                )}
+              </div>
 
-              <EntryPriceField
-                state={state}
-                update={update}
-                onFetch={() => fetchPrice.mutate()}
-                fetching={fetchPrice.isPending}
-              />
-
-              <FieldGroup
-                label="Stop loss"
-                hint="Distance from entry, or absolute price."
+              <Tabs
+                value={state.stopMode}
+                onValueChange={(v) => update("stopMode", v as StopMode)}
               >
-                <Tabs
-                  value={state.stopMode}
-                  onValueChange={(v) => update("stopMode", v as StopMode)}
-                >
-                  <TabsList className="grid w-full grid-cols-2">
-                    <TabsTrigger value="pips">Pips</TabsTrigger>
-                    <TabsTrigger value="price">Price</TabsTrigger>
-                  </TabsList>
-                </Tabs>
-                <Input
-                  inputMode="decimal"
-                  className="num mt-2"
-                  value={state.stopValue}
-                  onChange={(e) => update("stopValue", e.target.value)}
-                  placeholder={
-                    state.stopMode === "pips" ? "e.g. 20" : "e.g. 1.0820"
-                  }
-                />
-              </FieldGroup>
+                <TabsList className="grid w-full grid-cols-2">
+                  <TabsTrigger value="pips">Stop Loss Pips</TabsTrigger>
+                  <TabsTrigger value="price">Stop Loss Price</TabsTrigger>
+                </TabsList>
+              </Tabs>
 
-              <TakeProfitField state={state} update={update} />
-
-              <RiskFields state={state} update={update} />
+              {state.stopMode === "price" ? (
+                <Field label="Entry Price">
+                  <div className="flex gap-2">
+                    <Input
+                      inputMode="decimal"
+                      className="num"
+                      value={state.entryPrice}
+                      onChange={(e) => update("entryPrice", e.target.value)}
+                      placeholder="1.0850"
+                    />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => fetchPrice.mutate()}
+                      disabled={fetchPrice.isPending || !state.symbol}
+                    >
+                      <RefreshCw
+                        className={cn(
+                          "mr-1 size-4",
+                          fetchPrice.isPending && "animate-spin",
+                        )}
+                      />
+                      Live
+                    </Button>
+                  </div>
+                </Field>
+              ) : null}
             </TabsContent>
 
+            {/* ─── CRYPTO ────────────────────────────────────────── */}
             <TabsContent value="CRYPTO" className="mt-4 space-y-4">
               <div className="grid grid-cols-2 gap-3">
-                <FieldGroup label="Account currency">
+                <Field label="Account Currency">
                   <Select
                     value={state.accountCurrency}
                     onValueChange={(v) => v && update("accountCurrency", v)}
@@ -303,41 +320,62 @@ export function CalculatorClient() {
                       ))}
                     </SelectContent>
                   </Select>
-                </FieldGroup>
+                </Field>
 
-                <FieldGroup label="Symbol">
+                <Field label="Symbol">
                   <InstrumentCombobox
                     market="CRYPTO"
                     value={state.symbol}
                     onChange={(v) => update("symbol", v)}
                   />
-                </FieldGroup>
+                </Field>
               </div>
 
-              <DirectionToggle
-                value={state.direction}
-                onChange={(v) => update("direction", v)}
-              />
+              <Field label="Risk Amount">
+                <Input
+                  inputMode="decimal"
+                  className="num"
+                  value={state.riskAmount}
+                  onChange={(e) => update("riskAmount", e.target.value)}
+                  placeholder="50"
+                />
+              </Field>
 
-              <EntryPriceField
-                state={state}
-                update={update}
-                onFetch={() => fetchPrice.mutate()}
-                fetching={fetchPrice.isPending}
-              />
+              <Field label="Entry Price">
+                <div className="flex gap-2">
+                  <Input
+                    inputMode="decimal"
+                    className="num"
+                    value={state.entryPrice}
+                    onChange={(e) => update("entryPrice", e.target.value)}
+                    placeholder="0.00"
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => fetchPrice.mutate()}
+                    disabled={fetchPrice.isPending || !state.symbol}
+                  >
+                    <RefreshCw
+                      className={cn(
+                        "mr-1 size-4",
+                        fetchPrice.isPending && "animate-spin",
+                      )}
+                    />
+                    Live
+                  </Button>
+                </div>
+              </Field>
 
-              <FieldGroup label="Stop loss price">
+              <Field label="Stop Loss Price">
                 <Input
                   inputMode="decimal"
                   className="num"
                   value={state.stopPrice}
                   onChange={(e) => update("stopPrice", e.target.value)}
-                  placeholder="e.g. 65000"
+                  placeholder="0.00"
                 />
-              </FieldGroup>
-
-              <TakeProfitField state={state} update={update} />
-              <RiskFields state={state} update={update} />
+              </Field>
             </TabsContent>
           </Tabs>
 
@@ -352,7 +390,6 @@ export function CalculatorClient() {
         </CardContent>
       </Card>
 
-      {/* ─── Result ─────────────────────────────────────── */}
       <ResultPanel state={state} result={result} />
     </div>
   );
@@ -362,176 +399,20 @@ export function CalculatorClient() {
 // Subcomponents
 // ──────────────────────────────────────────────────────────────────────
 
-function FieldGroup({
+function Field({
   label,
-  hint,
   children,
 }: {
   label: string;
-  hint?: string;
   children: React.ReactNode;
 }) {
   return (
     <div className="space-y-1.5">
-      <Label className="flex items-baseline justify-between">
-        <span>{label}</span>
-        {hint ? (
-          <span className="text-xs font-normal text-muted-foreground">
-            {hint}
-          </span>
-        ) : null}
-      </Label>
+      <Label>{label}</Label>
       {children}
     </div>
   );
 }
-
-function DirectionToggle({
-  value,
-  onChange,
-}: {
-  value: Direction;
-  onChange: (v: Direction) => void;
-}) {
-  return (
-    <FieldGroup label="Direction">
-      <div className="grid grid-cols-2 gap-2">
-        <Button
-          type="button"
-          variant={value === "LONG" ? "default" : "outline"}
-          className={cn(
-            value === "LONG" &&
-              "bg-bullish text-bullish-foreground hover:bg-bullish/90",
-          )}
-          onClick={() => onChange("LONG")}
-        >
-          <ArrowUpRight className="mr-1 size-4" />
-          Long
-        </Button>
-        <Button
-          type="button"
-          variant={value === "SHORT" ? "default" : "outline"}
-          className={cn(
-            value === "SHORT" &&
-              "bg-bearish text-bearish-foreground hover:bg-bearish/90",
-          )}
-          onClick={() => onChange("SHORT")}
-        >
-          <ArrowDownRight className="mr-1 size-4" />
-          Short
-        </Button>
-      </div>
-    </FieldGroup>
-  );
-}
-
-function EntryPriceField({
-  state,
-  update,
-  onFetch,
-  fetching,
-}: {
-  state: FormState;
-  update: <K extends keyof FormState>(k: K, v: FormState[K]) => void;
-  onFetch: () => void;
-  fetching: boolean;
-}) {
-  return (
-    <FieldGroup label="Entry price">
-      <div className="flex gap-2">
-        <Input
-          inputMode="decimal"
-          className="num"
-          value={state.entryPrice}
-          onChange={(e) => update("entryPrice", e.target.value)}
-          placeholder="0.0000"
-        />
-        <Button
-          type="button"
-          variant="outline"
-          size="default"
-          onClick={onFetch}
-          disabled={fetching || !state.symbol}
-        >
-          <RefreshCw
-            className={cn("mr-1 size-4", fetching && "animate-spin")}
-          />
-          Live
-        </Button>
-      </div>
-    </FieldGroup>
-  );
-}
-
-function TakeProfitField({
-  state,
-  update,
-}: {
-  state: FormState;
-  update: <K extends keyof FormState>(k: K, v: FormState[K]) => void;
-}) {
-  return (
-    <FieldGroup label="Take profit price (optional)">
-      <Input
-        inputMode="decimal"
-        className="num"
-        value={state.takeProfitPrice}
-        onChange={(e) => update("takeProfitPrice", e.target.value)}
-        placeholder="—"
-      />
-    </FieldGroup>
-  );
-}
-
-function RiskFields({
-  state,
-  update,
-}: {
-  state: FormState;
-  update: <K extends keyof FormState>(k: K, v: FormState[K]) => void;
-}) {
-  return (
-    <>
-      <FieldGroup label="Risk">
-        <Tabs
-          value={state.riskMode}
-          onValueChange={(v) => update("riskMode", v as RiskMode)}
-        >
-          <TabsList className="grid w-full grid-cols-2">
-            <TabsTrigger value="percent">% of account</TabsTrigger>
-            <TabsTrigger value="fixed">Fixed amount</TabsTrigger>
-          </TabsList>
-        </Tabs>
-        <div className="mt-2 grid grid-cols-2 gap-2">
-          <Input
-            inputMode="decimal"
-            className="num"
-            value={state.riskValue}
-            onChange={(e) => update("riskValue", e.target.value)}
-            placeholder={state.riskMode === "percent" ? "1.0" : "50"}
-          />
-          {state.riskMode === "percent" ? (
-            <Input
-              inputMode="decimal"
-              className="num"
-              value={state.accountBalance}
-              onChange={(e) => update("accountBalance", e.target.value)}
-              placeholder="Account balance"
-            />
-          ) : (
-            <div className="flex items-center justify-center rounded-md border bg-muted/30 px-3 text-xs text-muted-foreground">
-              {state.accountCurrency}
-            </div>
-          )}
-        </div>
-      </FieldGroup>
-    </>
-  );
-}
-
-// ──────────────────────────────────────────────────────────────────────
-// Result panel
-// ──────────────────────────────────────────────────────────────────────
 
 function ResultPanel({
   state,
@@ -546,8 +427,7 @@ function ResultPanel({
         <CardHeader>
           <CardTitle className="text-base">Result</CardTitle>
           <CardDescription>
-            Fill in the form and click <strong>Calculate</strong> to see the
-            recommended position size.
+            Fill in the form and click <strong>Calculate</strong>.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -572,138 +452,76 @@ function ResultPanel({
       <CardHeader>
         <div className="flex items-center justify-between">
           <CardTitle className="text-base">Result</CardTitle>
-          <Badge
-            variant="outline"
-            className={cn(
-              "font-mono",
-              state.direction === "LONG"
-                ? "border-bullish/40 text-bullish"
-                : "border-bearish/40 text-bearish",
-            )}
-          >
-            {state.direction} · {result.meta.display}
+          <Badge variant="outline" className="font-mono">
+            {result.meta.display}
           </Badge>
         </div>
       </CardHeader>
-      <CardContent className="space-y-5">
-        {/* Risk */}
-        <Row
-          label="Risk"
-          value={`${ccy} ${fmt(result.riskAmount)}`}
-          accent="bearish"
-        />
-
+      <CardContent className="space-y-3">
+        <Row label="Risk Amount" value={`${ccy} ${fmt(result.riskAmount)}`} />
         <Separator />
 
-        {/* Position size block */}
-        <div className="space-y-2">
-          <div className="text-xs uppercase tracking-wider text-muted-foreground">
-            Position size
-          </div>
-          {result.market === "FOREX" ? (
-            <div className="space-y-1.5">
+        {result.market === "FOREX" ? (
+          <>
+            <Row
+              label="Units"
+              value={fmt(result.positionSize.units ?? 0, 0)}
+            />
+            <Row
+              label="Standard Lots"
+              value={fmt(result.positionSize.standardLots ?? 0, 4)}
+              emphasis
+            />
+            <Row
+              label="Mini Lots"
+              value={fmt(result.positionSize.miniLots ?? 0, 3)}
+            />
+            <Row
+              label="Micro Lots"
+              value={fmt(result.positionSize.microLots ?? 0, 2)}
+            />
+            <Separator />
+            <Row
+              label={`Pip Value per Lot (${ccy})`}
+              value={fmt(result.pipValuePerLotInAccount ?? 0, 4)}
+            />
+            {result.stopLossPips != null ? (
               <Row
-                label="Standard lots"
-                value={fmt(result.positionSize.standardLots ?? 0, 4)}
-                emphasis
+                label="Stop Loss"
+                value={`${fmt(result.stopLossPips, 1)} pips`}
               />
-              <Row
-                label="Mini lots"
-                value={fmt(result.positionSize.miniLots ?? 0, 3)}
-              />
-              <Row
-                label="Micro lots"
-                value={fmt(result.positionSize.microLots ?? 0, 2)}
-              />
-              <Row
-                label="Units"
-                value={fmt(result.positionSize.units ?? 0, 0)}
-              />
-            </div>
-          ) : (
+            ) : null}
+          </>
+        ) : (
+          <>
             <Row
               label={`Units (${result.meta.display.split(" / ")[0]})`}
               value={fmt(result.positionSize.units, 8)}
               emphasis
             />
-          )}
-        </div>
-
-        <Separator />
-
-        {/* Stop / pip detail */}
-        <div className="space-y-1.5">
-          <div className="text-xs uppercase tracking-wider text-muted-foreground">
-            Stop loss
-          </div>
-          {result.stopLossPips != null ? (
+            <Separator />
             <Row
-              label="Distance"
-              value={`${fmt(result.stopLossPips, 1)} pips`}
+              label={`Notional (${result.meta.quoteCurrency})`}
+              value={fmt(result.notional)}
             />
-          ) : (
             <Row
-              label="Distance"
+              label={`Notional (${ccy})`}
+              value={fmt(result.notionalInAccount)}
+            />
+            <Row
+              label="Stop Loss Distance"
               value={fmt(result.stopLossDistance, 8)}
             />
-          )}
-          {result.pipValuePerLotInAccount != null ? (
-            <Row
-              label="Pip value (1 std lot)"
-              value={`${ccy} ${fmt(result.pipValuePerLotInAccount, 4)}`}
-            />
-          ) : null}
-        </div>
+          </>
+        )}
 
-        <Separator />
-
-        {/* Notional */}
-        <div className="space-y-1.5">
-          <div className="text-xs uppercase tracking-wider text-muted-foreground">
-            Notional
-          </div>
-          <Row
-            label={`In ${result.meta.quoteCurrency}`}
-            value={fmt(result.notional)}
-          />
-          <Row
-            label={`In ${ccy}`}
-            value={fmt(result.notionalInAccount)}
-          />
-          {result.meta.quoteToAccountRate !== 1 ? (
-            <Row
-              label={`${result.meta.quoteCurrency}/${ccy} rate`}
-              value={fmt(result.meta.quoteToAccountRate, 4)}
-            />
-          ) : null}
-        </div>
-
-        {result.rrRatio != null ? (
+        {result.meta.quoteToAccountRate !== 1 ? (
           <>
             <Separator />
-            <div className="space-y-1.5">
-              <div className="text-xs uppercase tracking-wider text-muted-foreground">
-                Take profit
-              </div>
-              {result.takeProfitPips != null ? (
-                <Row
-                  label="Distance"
-                  value={`${fmt(result.takeProfitPips, 1)} pips`}
-                />
-              ) : null}
-              <Row
-                label="Reward : Risk"
-                value={`${fmt(result.rrRatio, 2)} : 1`}
-                emphasis
-              />
-              {result.expectedProfit != null ? (
-                <Row
-                  label="Expected profit"
-                  value={`${ccy} ${fmt(result.expectedProfit)}`}
-                  accent="bullish"
-                />
-              ) : null}
-            </div>
+            <Row
+              label={`${result.meta.quoteCurrency} → ${ccy}`}
+              value={fmt(result.meta.quoteToAccountRate, 4)}
+            />
           </>
         ) : null}
 
@@ -723,23 +541,16 @@ function Row({
   label,
   value,
   emphasis,
-  accent,
 }: {
   label: string;
   value: string;
   emphasis?: boolean;
-  accent?: "bullish" | "bearish";
 }) {
   return (
     <div className="flex items-baseline justify-between gap-2">
       <span className="text-sm text-muted-foreground">{label}</span>
       <span
-        className={cn(
-          "num text-sm",
-          emphasis && "text-base font-semibold",
-          accent === "bullish" && "text-bullish",
-          accent === "bearish" && "text-bearish",
-        )}
+        className={cn("num text-sm", emphasis && "text-base font-semibold")}
       >
         {value}
       </span>
