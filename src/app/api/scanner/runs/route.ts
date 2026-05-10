@@ -6,18 +6,27 @@ import { runScan } from "@/lib/scanner/runner";
 import { ALL_TIMEFRAMES } from "@/lib/scanner/candles";
 import { DEFAULT_STRATEGY } from "@/lib/scanner/strategies";
 
-const requestSchema = z.object({
-  market: z.enum(["FOREX", "CRYPTO"]),
-  symbols: z.array(z.string().min(2).max(20)).min(1).max(50),
-  timeframes: z
-    .array(z.enum(ALL_TIMEFRAMES as [string, ...string[]]))
-    .min(1)
-    .max(ALL_TIMEFRAMES.length),
-  // Single strategy. Field accepted for backward-compat but ignored.
-  indicators: z.array(z.enum(["ema-wma-on-rsi"])).optional(),
-  limitPerTF: z.coerce.number().int().min(50).max(1000).optional(),
-  name: z.string().max(120).optional(),
-});
+const requestSchema = z
+  .object({
+    market: z.enum(["FOREX", "CRYPTO"]),
+    symbols: z.array(z.string().min(2).max(20)).max(50),
+    timeframes: z
+      .array(z.enum(ALL_TIMEFRAMES as [string, ...string[]]))
+      .min(1)
+      .max(ALL_TIMEFRAMES.length),
+    // Single strategy. Field accepted for backward-compat but ignored.
+    indicators: z.array(z.enum(["ema-wma-on-rsi"])).optional(),
+    limitPerTF: z.coerce.number().int().min(50).max(1000).optional(),
+    name: z.string().max(120).optional(),
+    includeConsensusTop: z.boolean().optional(),
+  })
+  .refine(
+    (data) => data.symbols.length > 0 || data.includeConsensusTop === true,
+    {
+      message: "Cần chọn ít nhất 1 symbol hoặc bật Top 10 đồng thuận",
+      path: ["symbols"],
+    },
+  );
 
 export async function POST(req: Request) {
   const session = await auth();

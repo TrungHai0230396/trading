@@ -1,0 +1,26 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    environment:
+      # Override .env so the container talks to the mysql service, not localhost.
+      DATABASE_URL: "mysql://tranding:tranding@mysql:3306/tranding"
+      NODE_ENV: development
+      NEXT_TELEMETRY_DISABLED: "1"
+      AUTH_TRUST_HOST: "true"
+      # Improve file watching reliability on Docker Desktop/macOS.
+      WATCHPACK_POLLING: "true"
+      CHOKIDAR_USEPOLLING: "true"
+    volumes:
+      - .:/app
+      - app-node-modules:/app/node_modules
+      - app-next-cache:/app/.next
+    command: >
+      sh -c "pnpm exec prisma generate &&
+             pnpm exec prisma migrate deploy &&
+             pnpm dev --hostname 0.0.0.0"
+
+volumes:
+  app-node-modules:
+  app-next-cache:

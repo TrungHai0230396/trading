@@ -3,7 +3,7 @@
 import * as React from "react";
 import { useMutation } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Radar, Plus, X } from "lucide-react";
+import { ExternalLink, Eye, EyeOff, Radar, Plus, X } from "lucide-react";
 
 import {
   Card,
@@ -34,6 +34,7 @@ import {
 } from "@/lib/scanner/candles";
 import { DEFAULT_STRATEGY } from "@/lib/scanner/strategies";
 import type {
+  ConsensusTopEntry,
   PerTimeframeResult,
   ScanResult,
   ScanSummaryEntry,
@@ -44,12 +45,31 @@ type Market = "FOREX" | "CRYPTO";
 
 const DEFAULT_FOREX = ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD"];
 const DEFAULT_CRYPTO = ["BTCUSDT", "ETHUSDT", "SOLUSDT"];
+const TIMEFRAMES_STORAGE_KEY = "scanner:selected-timeframes";
+const LAST_RESULT_STORAGE_KEY = "scanner:last-result";
+const CHART_HEIGHT_STORAGE_KEY = "scanner:chart-height";
+const DEFAULT_CHART_HEIGHT = 1000;
+const MIN_CHART_HEIGHT = 360;
+const MAX_CHART_HEIGHT = 1800;
 
 type FormState = {
   market: Market;
   symbols: string[];
   timeframes: Timeframe[];
   limitPerTF: string;
+};
+
+type ChartSelection = {
+  symbol: string;
+  market: Market;
+  timeframe: Timeframe;
+};
+
+type StoredScannerSnapshot = {
+  state: FormState;
+  result: ScanResult;
+  chartSelection: ChartSelection | null;
+  savedAt: string;
 };
 
 const initialState = (): FormState => ({
@@ -59,23 +79,158 @@ const initialState = (): FormState => ({
   limitPerTF: "200",
 });
 
+function parseStoredTimeframes(value: string | null): Timeframe[] | null {
+  if (!value) return null;
+
+  try {
+    const parsed = JSON.parse(value);
+    if (!Array.isArray(parsed)) return null;
+
+    const timeframes = parsed.filter((item): item is Timeframe =>
+      (ALL_TIMEFRAMES as readonly string[]).includes(item),
+    );
+
+    return timeframes.length > 0 ? Array.from(new Set(timeframes)) : null;
+  } catch {
+    return null;
+  }
+}
+
+function parseStoredScannerSnapshot(
+  value: string | null,
+): StoredScannerSnapshot | null {
+  if (!value) return null;
+
+  try {
+    const parsed = JSON.parse(value) as Partial<StoredScannerSnapshot>;
+    if (!parsed.state || !parsed.result) return null;
+    if (parsed.state.market !== "FOREX" && parsed.state.market !== "CRYPTO") {
+      return null;
+    }
+    if (!Array.isArray(parsed.state.symbols) || !parsed.state.symbols.length) {
+      return null;
+    }
+
+    const timeframes = parsed.state.timeframes.filter((item): item is Timeframe =>
+      (ALL_TIMEFRAMES as readonly string[]).includes(item),
+    );
+    if (!timeframes.length) return null;
+
+    return {
+      state: {
+        market: parsed.state.market,
+        symbols: parsed.state.symbols,
+        timeframes,
+        limitPerTF: parsed.state.limitPerTF || "200",
+      },
+      result: parsed.result,
+      chartSelection: parsed.chartSelection ?? null,
+      savedAt: parsed.savedAt ?? new Date().toISOString(),
+    };
+  } catch {
+    return null;
+  }
+}
+
 export function ScannerClient() {
   const [state, setState] = React.useState<FormState>(initialState);
   const [pickerSymbol, setPickerSymbol] = React.useState("");
   const [customSymbol, setCustomSymbol] = React.useState("");
   const [result, setResult] = React.useState<ScanResult | null>(null);
+  const [chartSelection, setChartSelection] =
+    React.useState<ChartSelection | null>(null);
+  const [chartVisible, setChartVisible] = React.useState(true);
+  const [chartHeight, setChartHeight] = React.useState(DEFAULT_CHART_HEIGHT);
+  const [hydrated, setHydrated] = React.useState(false);
+
+  React.useEffect(() => {
+    const timer = window.setTimeout(() => {
+      const stored = parseStoredTimeframes(
+        window.localStorage.getItem(TIMEFRAMES_STORAGE_KEY),
+      );
+
+      const snapshot = parseStoredScannerSnapshot(
+        window.localStorage.getItem(LAST_RESULT_STORAGE_KEY),
+      );
+
+      const storedChartHeight = Number(
+        window.localStorage.getItem(CHART_HEIGHT_STORAGE_KEY),
+      );
+      if (
+        Number.isFinite(storedChartHeight) &&
+        storedChartHeight >= MIN_CHART_HEIGHT &&
+        storedChartHeight <= MAX_CHART_HEIGHT
+      ) {
+        setChartHeight(storedChartHeight);
+      }
+
+      if (snapshot) {
+        setState(snapshot.state);
+        setResult(snapshot.result);
+        setChartSelection(
+          snapshot.chartSelection ??
+            (snapshot.result.summary[0]
+              ? {
+                  symbol: snapshot.result.summary[0].symbol,
+                  market: snapshot.state.market,
+                  timeframe: snapshot.state.timeframes[0] ?? "1h",
+                }
+              : null),
+        );
+      } else if (stored) {
+        setState((prev) =>
+          prev.timeframes.join("|") === stored.join("|")
+            ? prev
+            : { ...prev, timeframes: stored },
+        );
+      }
+
+      setHydrated(true);
+    }, 0);
+
+    return () => window.clearTimeout(timer);
+  }, []);
+
+  React.useEffect(() => {
+    if (!hydrated) return;
+
+    window.localStorage.setItem(
+      TIMEFRAMES_STORAGE_KEY,
+      JSON.stringify(state.timeframes),
+    );
+  }, [hydrated, state.timeframes]);
 
   const update = <K extends keyof FormState>(key: K, value: FormState[K]) =>
     setState((s) => ({ ...s, [key]: value }));
 
+  const selectChart = React.useCallback((selection: ChartSelection) => {
+    setChartSelection(selection);
+    setChartVisible(true);
+
+    const snapshot = parseStoredScannerSnapshot(
+      window.localStorage.getItem(LAST_RESULT_STORAGE_KEY),
+    );
+    if (snapshot) {
+      window.localStorage.setItem(
+        LAST_RESULT_STORAGE_KEY,
+        JSON.stringify({
+          ...snapshot,
+          chartSelection: selection,
+          savedAt: new Date().toISOString(),
+        } satisfies StoredScannerSnapshot),
+      );
+    }
+  }, []);
+
   const onMarketChange = (m: string | null) => {
     if (!m) return;
     const market = m as Market;
-    setState({
+    setState((prev) => ({
       ...initialState(),
       market,
       symbols: market === "FOREX" ? [...DEFAULT_FOREX] : [...DEFAULT_CRYPTO],
-    });
+      timeframes: prev.timeframes,
+    }));
     setPickerSymbol("");
     setCustomSymbol("");
     setResult(null);
@@ -106,17 +261,22 @@ export function ScannerClient() {
     }));
 
   const runScan = useMutation({
-    mutationFn: async () => {
+    mutationFn: async ({
+      includeConsensusTop,
+    }: {
+      includeConsensusTop: boolean;
+    }) => {
       const limitPerTF = Number(state.limitPerTF) || 200;
       const res = await fetch("/api/scanner/runs", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           market: state.market,
-          symbols: state.symbols,
+          symbols: includeConsensusTop ? [] : state.symbols,
           timeframes: state.timeframes,
           indicators: [DEFAULT_STRATEGY],
           limitPerTF,
+          includeConsensusTop,
         }),
       });
       const data = await res.json();
@@ -125,14 +285,47 @@ export function ScannerClient() {
     },
     onSuccess: (data) => {
       setResult(data);
-      toast.success(`Đã quét ${data.summary.length} symbol.`);
+      setChartSelection((prev) => {
+        const nextSelection =
+          prev && data.summary.some((row) => row.symbol === prev.symbol)
+            ? prev
+            : data.summary[0]
+              ? {
+                  symbol: data.summary[0].symbol,
+                  market: state.market,
+                  timeframe: state.timeframes[0] ?? "1h",
+                }
+              : null;
+
+        window.localStorage.setItem(
+          LAST_RESULT_STORAGE_KEY,
+          JSON.stringify({
+            state,
+            result: data,
+            chartSelection: nextSelection,
+            savedAt: new Date().toISOString(),
+          } satisfies StoredScannerSnapshot),
+        );
+
+        return nextSelection;
+      });
+      toast.success(
+        data.consensusTop
+          ? `Đã quét ${data.summary.length} symbol và Top 10 đồng thuận.`
+          : `Đã quét ${data.summary.length} symbol.`,
+      );
     },
     onError: (err) =>
       toast.error(err instanceof Error ? err.message : "Lỗi không xác định"),
   });
 
-  const canRun =
+  const canRunCustom =
     state.symbols.length > 0 &&
+    state.timeframes.length > 0 &&
+    !runScan.isPending;
+
+  const canRunTop10 =
+    state.market === "CRYPTO" &&
     state.timeframes.length > 0 &&
     !runScan.isPending;
 
@@ -146,8 +339,8 @@ export function ScannerClient() {
           </CardTitle>
           <CardDescription>
             Chọn thị trường, symbol và khung thời gian rồi bấm{" "}
-            <strong>Quét</strong>. Bullish khi đường EMA(9) cắt lên trên đường
-            WMA(45) trên RSI(14).
+            <strong>Quét coin đã chọn</strong>. Top 10 Bullish/Bearish đồng
+            thuận là chức năng riêng, chỉ chạy khi bạn bấm nút quét Top 10.
           </CardDescription>
         </CardHeader>
 
@@ -238,23 +431,40 @@ export function ScannerClient() {
 
           <div className="space-y-1.5">
             <Label>Khung thời gian</Label>
-            <div className="flex flex-col gap-2">
-              {ALL_TIMEFRAMES.map((tf) => (
-                <label
-                  key={tf}
-                  className="flex cursor-pointer items-center gap-2 rounded-md border bg-card/40 px-2.5 py-1.5 text-sm"
-                >
-                  <Checkbox
-                    checked={state.timeframes.includes(tf)}
-                    onCheckedChange={() => toggleTimeframe(tf)}
-                  />
-                  <span className="font-mono text-xs">{tf}</span>
-                  <span className="ml-auto text-xs text-muted-foreground">
-                    {TIMEFRAME_LABELS[tf]}
-                  </span>
-                </label>
-              ))}
-            </div>
+            {!hydrated ? (
+              <div className="flex flex-col gap-2">
+                {ALL_TIMEFRAMES.map((tf) => (
+                  <div
+                    key={tf}
+                    className="flex items-center gap-2 rounded-md border bg-card/40 px-2.5 py-1.5 text-sm opacity-70"
+                  >
+                    <div className="size-4 rounded-[4px] border" />
+                    <span className="font-mono text-xs">{tf}</span>
+                    <span className="ml-auto text-xs text-muted-foreground">
+                      {TIMEFRAME_LABELS[tf]}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="flex flex-col gap-2">
+                {ALL_TIMEFRAMES.map((tf) => (
+                  <label
+                    key={tf}
+                    className="flex cursor-pointer items-center gap-2 rounded-md border bg-card/40 px-2.5 py-1.5 text-sm"
+                  >
+                    <Checkbox
+                      checked={state.timeframes.includes(tf)}
+                      onCheckedChange={() => toggleTimeframe(tf)}
+                    />
+                    <span className="font-mono text-xs">{tf}</span>
+                    <span className="ml-auto text-xs text-muted-foreground">
+                      {TIMEFRAME_LABELS[tf]}
+                    </span>
+                  </label>
+                ))}
+              </div>
+            )}
           </div>
 
           <div className="space-y-1.5">
@@ -292,21 +502,45 @@ export function ScannerClient() {
             </p>
           </div>
 
-          <Button
-            type="button"
-            className="w-full"
-            disabled={!canRun}
-            onClick={() => runScan.mutate()}
-          >
-            {runScan.isPending ? "Đang quét…" : "Quét"}
-          </Button>
+          <div className="space-y-2">
+            <Button
+              type="button"
+              className="w-full"
+              disabled={!canRunCustom}
+              onClick={() => runScan.mutate({ includeConsensusTop: false })}
+            >
+              {runScan.isPending ? "Đang quét đa khung…" : "Quét coin đã chọn"}
+            </Button>
+            <Button
+              type="button"
+              className="w-full"
+              variant="secondary"
+              disabled={!canRunTop10}
+              onClick={() => runScan.mutate({ includeConsensusTop: true })}
+            >
+              {runScan.isPending
+                ? "Đang quét Top 10…"
+                : "Quét Top 10 đồng thuận"}
+            </Button>
+            <p className="text-center text-xs text-muted-foreground">
+              Nút Top 10 chỉ dùng cho Crypto và chỉ chạy khi bạn chủ động bấm.
+              Mặc định hệ thống chỉ quét danh sách coin/symbol đã chọn.
+            </p>
+          </div>
         </CardContent>
       </Card>
 
       <ResultsPanel
         result={result}
+        market={state.market}
         timeframes={state.timeframes}
         loading={runScan.isPending}
+        chartSelection={chartSelection}
+        chartVisible={chartVisible}
+        chartHeight={chartHeight}
+        onToggleChart={() => setChartVisible((visible) => !visible)}
+        onChartHeightChange={setChartHeight}
+        onSelectChart={selectChart}
       />
     </div>
   );
@@ -314,12 +548,26 @@ export function ScannerClient() {
 
 function ResultsPanel({
   result,
+  market,
   timeframes,
   loading,
+  chartSelection,
+  chartVisible,
+  chartHeight,
+  onToggleChart,
+  onChartHeightChange,
+  onSelectChart,
 }: {
   result: ScanResult | null;
+  market: Market;
   timeframes: Timeframe[];
   loading: boolean;
+  chartSelection: ChartSelection | null;
+  chartVisible: boolean;
+  chartHeight: number;
+  onToggleChart: () => void;
+  onChartHeightChange: (height: number) => void;
+  onSelectChart: (selection: ChartSelection) => void;
 }) {
   if (loading && !result) {
     return (
@@ -363,7 +611,8 @@ function ResultsPanel({
           <div>
             <CardTitle className="text-base">Kết quả quét</CardTitle>
             <CardDescription>
-              {result.summary.length} symbol · sắp xếp theo điểm giảm dần
+              {result.summary.length} symbol đã chọn · sắp xếp theo điểm giảm
+              dần
             </CardDescription>
           </div>
           <Badge variant="outline" className="font-mono text-[11px]">
@@ -371,37 +620,446 @@ function ResultsPanel({
           </Badge>
         </div>
       </CardHeader>
-      <CardContent className="overflow-x-auto">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Symbol</TableHead>
-              <TableHead>Điểm</TableHead>
-              <TableHead>Đồng thuận</TableHead>
-              {timeframes.map((tf) => (
-                <TableHead key={tf} className="text-center font-mono">
-                  {tf}
-                </TableHead>
-              ))}
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {result.summary.map((row) => (
-              <SummaryRow key={row.symbol} row={row} timeframes={timeframes} />
-            ))}
-          </TableBody>
-        </Table>
+      <CardContent className="space-y-5">
+        {result.consensusTop ? (
+          <ConsensusTopPanel
+            result={result}
+            market={market}
+            timeframe={timeframes[0] ?? "1h"}
+            onSelectChart={onSelectChart}
+          />
+        ) : null}
+
+        <div className="space-y-4">
+          <div className="overflow-x-auto rounded-lg border">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Symbol</TableHead>
+                  <TableHead>Điểm</TableHead>
+                  <TableHead>Đồng thuận</TableHead>
+                  {timeframes.map((tf) => (
+                    <TableHead key={tf} className="text-center font-mono">
+                      {tf}
+                    </TableHead>
+                  ))}
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {result.summary.map((row) => (
+                  <SummaryRow
+                    key={row.symbol}
+                    row={row}
+                    market={market}
+                    timeframes={timeframes}
+                    selectedSymbol={chartSelection?.symbol ?? null}
+                    onSelectChart={onSelectChart}
+                  />
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+
+          <TradingViewPanel
+            key={
+              chartSelection
+                ? `${chartSelection.market}-${chartSelection.symbol}-${chartSelection.timeframe}-${chartVisible ? "visible" : "hidden"}`
+                : `empty-${chartVisible ? "visible" : "hidden"}`
+            }
+            selection={chartSelection}
+            visible={chartVisible}
+            height={chartHeight}
+            onToggleVisible={onToggleChart}
+            onHeightChange={onChartHeightChange}
+            onSelectChart={onSelectChart}
+          />
+        </div>
       </CardContent>
     </Card>
   );
 }
 
+function ConsensusTopPanel({
+  result,
+  market,
+  timeframe,
+  onSelectChart,
+}: {
+  result: ScanResult;
+  market: Market;
+  timeframe: Timeframe;
+  onSelectChart: (selection: ChartSelection) => void;
+}) {
+  const bullish = result.consensusTop?.bullish ?? [];
+  const bearish = result.consensusTop?.bearish ?? [];
+
+  return (
+    <div className="grid gap-3 xl:grid-cols-2">
+      <ConsensusTopList
+        title="Top 10 Bullish đồng thuận"
+        description="Coin có tín hiệu Bullish đồng thuận trên toàn bộ khung đã chọn."
+        rows={bullish}
+        signal="BULLISH"
+        emptyText="Chưa có coin Bullish đồng thuận tuyệt đối."
+        market={market}
+        timeframe={timeframe}
+        onSelectChart={onSelectChart}
+      />
+      <ConsensusTopList
+        title="Top 10 Bearish đồng thuận"
+        description="Coin có tín hiệu Bearish đồng thuận trên toàn bộ khung đã chọn."
+        rows={bearish}
+        signal="BEARISH"
+        emptyText="Chưa có coin Bearish đồng thuận tuyệt đối."
+        market={market}
+        timeframe={timeframe}
+        onSelectChart={onSelectChart}
+      />
+    </div>
+  );
+}
+
+function ConsensusTopList({
+  title,
+  description,
+  rows,
+  signal,
+  emptyText,
+  market,
+  timeframe,
+  onSelectChart,
+}: {
+  title: string;
+  description: string;
+  rows: ConsensusTopEntry[];
+  signal: "BULLISH" | "BEARISH";
+  emptyText: string;
+  market: Market;
+  timeframe: Timeframe;
+  onSelectChart: (selection: ChartSelection) => void;
+}) {
+  return (
+    <div className="rounded-lg border bg-card/40 p-3">
+      <div className="mb-3 space-y-1">
+        <div className="flex items-center justify-between gap-2">
+          <h3 className="text-sm font-medium">{title}</h3>
+          <SignalPill signal={signal} compact />
+        </div>
+        <p className="text-xs leading-relaxed text-muted-foreground">
+          {description}
+        </p>
+      </div>
+
+      {rows.length === 0 ? (
+        <div className="grid h-24 place-items-center rounded-md border border-dashed text-center text-xs text-muted-foreground">
+          {emptyText}
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {rows.map((row, index) => (
+            <ConsensusTopRow
+              key={`${signal}-${row.symbol}`}
+              index={index}
+              row={row}
+              market={market}
+              timeframe={timeframe}
+              onSelectChart={onSelectChart}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ConsensusTopRow({
+  index,
+  row,
+  market,
+  timeframe,
+  onSelectChart,
+}: {
+  index: number;
+  row: ConsensusTopEntry;
+  market: Market;
+  timeframe: Timeframe;
+  onSelectChart: (selection: ChartSelection) => void;
+}) {
+  return (
+    <button
+      type="button"
+      className="flex w-full items-center gap-2 rounded-md border bg-background/60 px-2.5 py-2 text-left transition-colors hover:bg-muted/60"
+      onClick={() => onSelectChart({ symbol: row.symbol, market, timeframe })}
+    >
+      <span className="num w-5 text-xs tabular-nums text-muted-foreground">
+        #{index + 1}
+      </span>
+      <span className="font-mono text-sm font-medium">{row.symbol}</span>
+      <span className="ml-auto">
+        <ScoreBar value={row.score} />
+      </span>
+    </button>
+  );
+}
+
+function tradingViewSymbol(selection: ChartSelection): string {
+  if (selection.market === "CRYPTO") return `BINANCE:${selection.symbol}`;
+  return `FX_IDC:${selection.symbol}`;
+}
+
+function tradingViewInterval(timeframe: Timeframe): string {
+  if (timeframe === "15m") return "15";
+  if (timeframe === "1h") return "60";
+  if (timeframe === "4h") return "240";
+  if (timeframe === "1d") return "D";
+  if (timeframe === "3d") return "3D";
+  if (timeframe === "1w") return "W";
+  return "M";
+}
+
+function tradingViewUrl(selection: ChartSelection): string {
+  const symbol = encodeURIComponent(tradingViewSymbol(selection));
+  return `https://www.tradingview.com/chart/?symbol=${symbol}&interval=${tradingViewInterval(selection.timeframe)}`;
+}
+
+function TradingViewPanel({
+  selection,
+  visible,
+  height,
+  onToggleVisible,
+  onHeightChange,
+  onSelectChart,
+}: {
+  selection: ChartSelection | null;
+  visible: boolean;
+  height: number;
+  onToggleVisible: () => void;
+  onHeightChange: (height: number) => void;
+  onSelectChart: (selection: ChartSelection) => void;
+}) {
+  const startResize = React.useCallback(
+    (event: React.PointerEvent<HTMLButtonElement>) => {
+      event.preventDefault();
+
+      const startY = event.clientY;
+      const startHeight = height;
+      const pointerId = event.pointerId;
+      const target = event.currentTarget;
+      target.setPointerCapture(pointerId);
+
+      const onPointerMove = (moveEvent: PointerEvent) => {
+        const nextHeight = Math.min(
+          MAX_CHART_HEIGHT,
+          Math.max(MIN_CHART_HEIGHT, startHeight + moveEvent.clientY - startY),
+        );
+        onHeightChange(nextHeight);
+      };
+
+      const onPointerUp = (upEvent: PointerEvent) => {
+        target.releasePointerCapture(pointerId);
+        window.removeEventListener("pointermove", onPointerMove);
+        window.removeEventListener("pointerup", onPointerUp);
+
+        const nextHeight = Math.min(
+          MAX_CHART_HEIGHT,
+          Math.max(MIN_CHART_HEIGHT, startHeight + upEvent.clientY - startY),
+        );
+        window.localStorage.setItem(CHART_HEIGHT_STORAGE_KEY, String(nextHeight));
+      };
+
+      window.addEventListener("pointermove", onPointerMove);
+      window.addEventListener("pointerup", onPointerUp);
+    },
+    [height, onHeightChange],
+  );
+
+  if (!selection) {
+    return (
+      <div className="grid min-h-[420px] place-items-center rounded-lg border border-dashed bg-card/40 p-4 text-center text-sm text-muted-foreground">
+        <div className="space-y-3">
+          <div>Bấm vào symbol để mở chart TradingView.</div>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onClick={onToggleVisible}
+          >
+            {visible ? (
+              <>
+                <EyeOff className="size-3.5" />
+                Ẩn chart
+              </>
+            ) : (
+              <>
+                <Eye className="size-3.5" />
+                Hiện chart
+              </>
+            )}
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="rounded-lg border bg-card/40">
+      <div className="flex items-center justify-between gap-2 border-b px-3 py-2">
+        <div>
+          <div className="font-mono text-sm font-medium">
+            {tradingViewSymbol(selection)}
+          </div>
+          <div className="text-xs text-muted-foreground">
+            TradingView · {selection.timeframe} · RSI(14), EMA(9), WMA(45)
+            trên RSI
+          </div>
+        </div>
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <div className="flex flex-wrap gap-1">
+            {ALL_TIMEFRAMES.map((tf) => (
+              <Button
+                key={tf}
+                type="button"
+                size="sm"
+                variant={selection.timeframe === tf ? "default" : "outline"}
+                onClick={() => onSelectChart({ ...selection, timeframe: tf })}
+                className="h-8 px-2 font-mono text-[11px]"
+              >
+                {tf}
+              </Button>
+            ))}
+          </div>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onClick={onToggleVisible}
+          >
+            {visible ? (
+              <>
+                <EyeOff className="size-3.5" />
+                Ẩn chart
+              </>
+            ) : (
+              <>
+                <Eye className="size-3.5" />
+                Hiện chart
+              </>
+            )}
+          </Button>
+          <Button
+            type="button"
+            size="icon-sm"
+            variant="outline"
+            onClick={() => window.open(tradingViewUrl(selection), "_blank")}
+            aria-label="Mở chart TradingView trong tab mới"
+          >
+            <ExternalLink className="size-3.5" />
+          </Button>
+        </div>
+      </div>
+      {visible ? (
+        <>
+          <TradingViewWidget selection={selection} height={height} />
+          <button
+            type="button"
+            className="flex h-8 w-full cursor-ns-resize items-center justify-center rounded-b-lg border-t bg-muted/30 text-[11px] text-muted-foreground transition-colors hover:bg-muted/60"
+            onPointerDown={startResize}
+            aria-label="Kéo để đổi chiều cao chart"
+            title="Kéo lên/xuống để đổi chiều cao chart"
+          >
+            Kéo để đổi chiều cao · {height}px
+          </button>
+        </>
+      ) : (
+        <div className="grid h-24 place-items-center rounded-b-lg border-t border-dashed text-sm text-muted-foreground">
+          Chart đang ẩn. Bấm “Hiện chart” để mở lại.
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TradingViewWidget({
+  selection,
+  height,
+}: {
+  selection: ChartSelection;
+  height: number;
+}) {
+  const containerRef = React.useRef<HTMLDivElement | null>(null);
+
+  React.useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    const chartHeight = `${height}px`;
+    container.style.height = chartHeight;
+    container.style.minHeight = chartHeight;
+
+    const widget = document.createElement("div");
+    widget.className = "tradingview-widget-container__widget";
+    widget.style.height = chartHeight;
+    widget.style.minHeight = chartHeight;
+    widget.style.width = "100%";
+    container.appendChild(widget);
+
+    const script = document.createElement("script");
+    script.src =
+      "https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js";
+    script.type = "text/javascript";
+    script.async = true;
+    script.innerHTML = JSON.stringify({
+      autosize: false,
+      width: "100%",
+      height: String(height),
+      symbol: tradingViewSymbol(selection),
+      interval: tradingViewInterval(selection.timeframe),
+      timezone: "Asia/Ho_Chi_Minh",
+      theme: "dark",
+      style: "1",
+      locale: "vi_VN",
+      allow_symbol_change: false,
+      calendar: false,
+      support_host: "https://www.tradingview.com",
+      studies: [
+        "RSI@tv-basicstudies",
+        "MAExp@tv-basicstudies",
+        "MAWeighted@tv-basicstudies",
+      ],
+      studies_overrides: {
+        "moving average exponential.length": 9,
+        "moving average weighted.length": 45,
+        "rsi.length": 14,
+      },
+    });
+    container.appendChild(script);
+
+    return () => {
+      container.innerHTML = "";
+    };
+  }, [height, selection]);
+
+  return (
+    <div
+      ref={containerRef}
+      className="tradingview-widget-container overflow-hidden"
+      style={{ height, minHeight: height }}
+    />
+  );
+}
+
 function SummaryRow({
   row,
+  market,
   timeframes,
+  selectedSymbol,
+  onSelectChart,
 }: {
   row: ScanSummaryEntry;
+  market: Market;
   timeframes: Timeframe[];
+  selectedSymbol: string | null;
+  onSelectChart: (selection: ChartSelection) => void;
 }) {
   const tfMap = new Map<string, PerTimeframeResult>();
   for (const t of row.perTF) tfMap.set(t.timeframe, t);
@@ -414,8 +1072,26 @@ function SummaryRow({
         : "MIXED";
 
   return (
-    <TableRow>
-      <TableCell className="font-mono text-sm">{row.symbol}</TableCell>
+    <TableRow
+      className={
+        selectedSymbol === row.symbol ? "bg-primary/5 hover:bg-primary/10" : ""
+      }
+    >
+      <TableCell>
+        <button
+          type="button"
+          className="font-mono text-sm font-medium underline-offset-4 hover:underline"
+          onClick={() =>
+            onSelectChart({
+              symbol: row.symbol,
+              market,
+              timeframe: timeframes[0] ?? "1h",
+            })
+          }
+        >
+          {row.symbol}
+        </button>
+      </TableCell>
       <TableCell>
         <ScoreBar value={row.score} />
       </TableCell>
@@ -445,7 +1121,20 @@ function SummaryRow({
         }
         return (
           <TableCell key={tf} className="text-center">
-            <SignalPill signal={cell.signal} compact />
+            <button
+              type="button"
+              className="rounded-md transition-opacity hover:opacity-80"
+              onClick={() =>
+                onSelectChart({
+                  symbol: row.symbol,
+                  market,
+                  timeframe: tf,
+                })
+              }
+              title={`Mở chart ${row.symbol} khung ${tf}`}
+            >
+              <SignalPill signal={cell.signal} compact />
+            </button>
           </TableCell>
         );
       })}

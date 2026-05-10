@@ -8,6 +8,7 @@
 
 import { db } from "@/lib/db";
 import { MarketType } from "@/generated/prisma";
+import { getTopBinanceUsdtSymbols } from "@/lib/quotes/binance";
 import {
   getCandles,
   isTimeframe,
@@ -42,9 +43,23 @@ export type ScanSummaryEntry = {
   perTF: PerTimeframeResult[];
 };
 
+export type ConsensusTopEntry = {
+  symbol: string;
+  score: number;
+  alignment: "BULLISH" | "BEARISH";
+  bullishCount: number;
+  bearishCount: number;
+  neutralCount: number;
+  perTF: PerTimeframeResult[];
+};
+
 export type ScanResult = {
   runId: string;
   summary: ScanSummaryEntry[];
+  consensusTop?: {
+    bullish: ConsensusTopEntry[];
+    bearish: ConsensusTopEntry[];
+  };
 };
 
 const CONCURRENCY = 5;
@@ -77,11 +92,110 @@ function score(bull: number, bear: number, total: number): number {
   return 50 + ((bull - bear) / total) * 50;
 }
 
+function toSummaryEntry(
+  symbol: string,
+  perTF: PerTimeframeResult[],
+): ScanSummaryEntry {
+  let bull = 0;
+  let bear = 0;
+  let neutral = 0;
+  for (const tf of perTF) {
+    if (tf.signal === "BULLISH") bull++;
+    else if (tf.signal === "BEARISH") bear++;
+    else neutral++;
+  }
+  const total = perTF.length;
+
+  return {
+    symbol,
+    score: Math.round(score(bull, bear, total) * 10) / 10,
+    alignment: alignmentLabel(bull, bear),
+    bullishCount: bull,
+    bearishCount: bear,
+    neutralCount: neutral,
+    perTF,
+  };
+}
+
+async function scanSymbol(args: {
+  runId: string;
+  market: Market;
+  symbol: string;
+  timeframes: Timeframe[];
+  indicators: StrategyId[];
+  limit: number;
+  persist: boolean;
+}): Promise<ScanSummaryEntry> {
+  const perTF: PerTimeframeResult[] = [];
+
+  for (const tf of args.timeframes) {
+    try {
+      const closes = await getCandles({
+        market: args.market,
+        symbol: args.symbol,
+        timeframe: tf,
+        limit: args.limit,
+      });
+
+      const perStrategy = args.indicators.map((id) => {
+        const r = runStrategy(id, closes);
+        return {
+          strategy: id,
+          signal: r.signal,
+          indicators: r.indicators,
+        };
+      });
+
+      const tfSignal = aggregateSignal(perStrategy.map((p) => p.signal));
+
+      perTF.push({ timeframe: tf, signal: tfSignal, perStrategy });
+
+      if (args.persist) {
+        await db.analysisResult.create({
+          data: {
+            runId: args.runId,
+            symbol: args.symbol,
+            timeframe: tf,
+            signal: tfSignal,
+            score:
+              tfSignal === "BULLISH" ? 100 : tfSignal === "BEARISH" ? 0 : 50,
+            indicators: perStrategy as unknown as object,
+          },
+        });
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Lỗi";
+      perTF.push({
+        timeframe: tf,
+        signal: "NEUTRAL",
+        perStrategy: [],
+        error: message,
+      });
+
+      if (args.persist) {
+        await db.analysisResult.create({
+          data: {
+            runId: args.runId,
+            symbol: args.symbol,
+            timeframe: tf,
+            signal: "NEUTRAL",
+            score: null,
+            indicators: { error: message } as unknown as object,
+          },
+        });
+      }
+    }
+  }
+
+  return toSummaryEntry(args.symbol, perTF);
+}
+
 async function processBatch<T, R>(
   items: T[],
   size: number,
   worker: (item: T) => Promise<R>,
 ): Promise<R[]> {
+  if (items.length === 0) return [];
   const out: R[] = new Array(items.length);
   let cursor = 0;
   async function next(): Promise<void> {
@@ -106,11 +220,14 @@ export async function runScan(opts: {
   indicators: string[];
   limitPerTF?: number;
   name?: string;
+  includeConsensusTop?: boolean;
 }): Promise<ScanResult> {
   const symbols = Array.from(
     new Set(opts.symbols.map((s) => s.trim().toUpperCase()).filter(Boolean)),
   );
-  if (symbols.length === 0) throw new Error("Cần ít nhất một symbol.");
+  if (symbols.length === 0 && !opts.includeConsensusTop) {
+    throw new Error("Cần ít nhất một symbol.");
+  }
 
   const timeframes: Timeframe[] = Array.from(new Set(opts.timeframes)).filter(
     isTimeframe,
@@ -137,86 +254,66 @@ export async function runScan(opts: {
     },
   });
 
-  const summary = await processBatch(symbols, CONCURRENCY, async (symbol) => {
-    const perTF: PerTimeframeResult[] = [];
-
-    for (const tf of timeframes) {
-      try {
-        const closes = await getCandles({
-          market: opts.market,
-          symbol,
-          timeframe: tf,
-          limit,
-        });
-
-        const perStrategy = indicators.map((id) => {
-          const r = runStrategy(id, closes);
-          return {
-            strategy: id,
-            signal: r.signal,
-            indicators: r.indicators,
-          };
-        });
-
-        const tfSignal = aggregateSignal(perStrategy.map((p) => p.signal));
-
-        perTF.push({ timeframe: tf, signal: tfSignal, perStrategy });
-
-        await db.analysisResult.create({
-          data: {
-            runId: run.id,
-            symbol,
-            timeframe: tf,
-            signal: tfSignal,
-            score:
-              tfSignal === "BULLISH" ? 100 : tfSignal === "BEARISH" ? 0 : 50,
-            indicators: perStrategy as unknown as object,
-          },
-        });
-      } catch (err) {
-        const message = err instanceof Error ? err.message : "Lỗi";
-        perTF.push({
-          timeframe: tf,
-          signal: "NEUTRAL",
-          perStrategy: [],
-          error: message,
-        });
-        await db.analysisResult.create({
-          data: {
-            runId: run.id,
-            symbol,
-            timeframe: tf,
-            signal: "NEUTRAL",
-            score: null,
-            indicators: { error: message } as unknown as object,
-          },
-        });
-      }
-    }
-
-    let bull = 0;
-    let bear = 0;
-    let neutral = 0;
-    for (const tf of perTF) {
-      if (tf.signal === "BULLISH") bull++;
-      else if (tf.signal === "BEARISH") bear++;
-      else neutral++;
-    }
-    const total = perTF.length;
-
-    return {
+  const summary = await processBatch(symbols, CONCURRENCY, (symbol) =>
+    scanSymbol({
+      runId: run.id,
+      market: opts.market,
       symbol,
-      score: Math.round(score(bull, bear, total) * 10) / 10,
-      alignment: alignmentLabel(bull, bear),
-      bullishCount: bull,
-      bearishCount: bear,
-      neutralCount: neutral,
-      perTF,
-    } satisfies ScanSummaryEntry;
-  });
+      timeframes,
+      indicators,
+      limit,
+      persist: true,
+    }),
+  );
 
   // Sort: highest score first; ties broken by symbol for stability.
   summary.sort((a, b) => b.score - a.score || a.symbol.localeCompare(b.symbol));
 
-  return { runId: run.id, summary };
+  let consensusTop: ScanResult["consensusTop"];
+
+  if (opts.includeConsensusTop && opts.market === "CRYPTO") {
+    const consensusUniverse = await getTopBinanceUsdtSymbols(100);
+
+    const consensusSummary = await processBatch(
+      consensusUniverse,
+      CONCURRENCY,
+      (symbol) =>
+        scanSymbol({
+          runId: run.id,
+          market: opts.market,
+          symbol,
+          timeframes,
+          indicators,
+          limit,
+          persist: false,
+        }),
+    );
+
+    const bullish = consensusSummary
+      .filter(
+        (row): row is ConsensusTopEntry =>
+          row.alignment === "BULLISH" && row.bullishCount === timeframes.length,
+      )
+      .sort((a, b) => b.score - a.score || a.symbol.localeCompare(b.symbol))
+      .slice(0, 10);
+
+    const bearish = consensusSummary
+      .filter(
+        (row): row is ConsensusTopEntry =>
+          row.alignment === "BEARISH" && row.bearishCount === timeframes.length,
+      )
+      .sort((a, b) => a.score - b.score || a.symbol.localeCompare(b.symbol))
+      .slice(0, 10);
+
+    consensusTop = {
+      bullish,
+      bearish,
+    };
+  }
+
+  return {
+    runId: run.id,
+    summary,
+    consensusTop,
+  };
 }
