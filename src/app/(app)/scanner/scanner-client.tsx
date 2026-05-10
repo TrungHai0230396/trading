@@ -1,9 +1,18 @@
 "use client";
 
 import * as React from "react";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { ExternalLink, Eye, EyeOff, Radar, Plus, X } from "lucide-react";
+import {
+  LineChart,
+  Line,
+  ResponsiveContainer,
+  ReferenceLine,
+  XAxis,
+  YAxis,
+  Tooltip,
+} from "recharts";
 
 import {
   Card,
@@ -48,9 +57,14 @@ const DEFAULT_CRYPTO = ["BTCUSDT", "ETHUSDT", "SOLUSDT"];
 const TIMEFRAMES_STORAGE_KEY = "scanner:selected-timeframes";
 const LAST_RESULT_STORAGE_KEY = "scanner:last-result";
 const CHART_HEIGHT_STORAGE_KEY = "scanner:chart-height";
+const RSI_HEIGHT_STORAGE_KEY = "scanner:rsi-height";
 const DEFAULT_CHART_HEIGHT = 1000;
 const MIN_CHART_HEIGHT = 360;
 const MAX_CHART_HEIGHT = 1800;
+const DEFAULT_RSI_HEIGHT = 240;
+const MIN_RSI_HEIGHT = 160;
+const MAX_RSI_HEIGHT = 520;
+const DEFAULT_CHART_TIMEFRAME: Timeframe = "1h";
 
 type FormState = {
   market: Market;
@@ -132,15 +146,23 @@ function parseStoredScannerSnapshot(
   }
 }
 
+function normalizeChartSelection(selection: ChartSelection): ChartSelection {
+  return selection.timeframe === "3d"
+    ? { ...selection, timeframe: DEFAULT_CHART_TIMEFRAME }
+    : selection;
+}
+
 export function ScannerClient() {
   const [state, setState] = React.useState<FormState>(initialState);
   const [pickerSymbol, setPickerSymbol] = React.useState("");
   const [customSymbol, setCustomSymbol] = React.useState("");
   const [result, setResult] = React.useState<ScanResult | null>(null);
+  const [errorMessage, setErrorMessage] = React.useState<string | null>(null);
   const [chartSelection, setChartSelection] =
     React.useState<ChartSelection | null>(null);
   const [chartVisible, setChartVisible] = React.useState(true);
   const [chartHeight, setChartHeight] = React.useState(DEFAULT_CHART_HEIGHT);
+  const [rsiHeight, setRsiHeight] = React.useState(DEFAULT_RSI_HEIGHT);
   const [hydrated, setHydrated] = React.useState(false);
 
   React.useEffect(() => {
@@ -164,18 +186,31 @@ export function ScannerClient() {
         setChartHeight(storedChartHeight);
       }
 
+      const storedRsiHeight = Number(
+        window.localStorage.getItem(RSI_HEIGHT_STORAGE_KEY),
+      );
+      if (
+        Number.isFinite(storedRsiHeight) &&
+        storedRsiHeight >= MIN_RSI_HEIGHT &&
+        storedRsiHeight <= MAX_RSI_HEIGHT
+      ) {
+        setRsiHeight(storedRsiHeight);
+      }
+
       if (snapshot) {
         setState(snapshot.state);
         setResult(snapshot.result);
+        const snapshotSelection = snapshot.chartSelection ??
+          (snapshot.result.summary[0]
+            ? {
+                symbol: snapshot.result.summary[0].symbol,
+                market: snapshot.state.market,
+                timeframe: snapshot.state.timeframes[0] ?? "1h",
+              }
+            : null);
+
         setChartSelection(
-          snapshot.chartSelection ??
-            (snapshot.result.summary[0]
-              ? {
-                  symbol: snapshot.result.summary[0].symbol,
-                  market: snapshot.state.market,
-                  timeframe: snapshot.state.timeframes[0] ?? "1h",
-                }
-              : null),
+          snapshotSelection ? normalizeChartSelection(snapshotSelection) : null,
         );
       } else if (stored) {
         setState((prev) =>
@@ -200,12 +235,18 @@ export function ScannerClient() {
     );
   }, [hydrated, state.timeframes]);
 
+  React.useEffect(() => {
+    if (!hydrated) return;
+    window.localStorage.setItem(RSI_HEIGHT_STORAGE_KEY, String(rsiHeight));
+  }, [hydrated, rsiHeight]);
+
   const update = <K extends keyof FormState>(key: K, value: FormState[K]) =>
     setState((s) => ({ ...s, [key]: value }));
 
   const selectChart = React.useCallback((selection: ChartSelection) => {
-    setChartSelection(selection);
-    setChartVisible(true);
+    const normalized = normalizeChartSelection(selection);
+
+    setChartSelection(normalized);
 
     const snapshot = parseStoredScannerSnapshot(
       window.localStorage.getItem(LAST_RESULT_STORAGE_KEY),
@@ -215,7 +256,7 @@ export function ScannerClient() {
         LAST_RESULT_STORAGE_KEY,
         JSON.stringify({
           ...snapshot,
-          chartSelection: selection,
+          chartSelection: normalized,
           savedAt: new Date().toISOString(),
         } satisfies StoredScannerSnapshot),
       );
@@ -285,6 +326,7 @@ export function ScannerClient() {
     },
     onSuccess: (data) => {
       setResult(data);
+      setErrorMessage(null);
       setChartSelection((prev) => {
         const nextSelection =
           prev && data.summary.some((row) => row.symbol === prev.symbol)
@@ -293,7 +335,11 @@ export function ScannerClient() {
               ? {
                   symbol: data.summary[0].symbol,
                   market: state.market,
-                  timeframe: state.timeframes[0] ?? "1h",
+                  timeframe: ALL_TIMEFRAMES.includes(
+                    state.timeframes[0] ?? "1h",
+                  )
+                    ? (state.timeframes[0] ?? "1h")
+                    : DEFAULT_CHART_TIMEFRAME,
                 }
               : null;
 
@@ -315,8 +361,11 @@ export function ScannerClient() {
           : `Đã quét ${data.summary.length} symbol.`,
       );
     },
-    onError: (err) =>
-      toast.error(err instanceof Error ? err.message : "Lỗi không xác định"),
+    onError: (err) => {
+      const message = err instanceof Error ? err.message : "Lỗi không xác định";
+      setErrorMessage(message);
+      toast.error(message);
+    },
   });
 
   const canRunCustom =
@@ -324,10 +373,7 @@ export function ScannerClient() {
     state.timeframes.length > 0 &&
     !runScan.isPending;
 
-  const canRunTop10 =
-    state.market === "CRYPTO" &&
-    state.timeframes.length > 0 &&
-    !runScan.isPending;
+  const canRunTop10 = state.timeframes.length > 0 && !runScan.isPending;
 
   return (
     <div className="grid gap-6 lg:grid-cols-[minmax(0,360px)_minmax(0,1fr)]">
@@ -341,6 +387,7 @@ export function ScannerClient() {
             Chọn thị trường, symbol và khung thời gian rồi bấm{" "}
             <strong>Quét coin đã chọn</strong>. Top 10 Bullish/Bearish đồng
             thuận là chức năng riêng, chỉ chạy khi bạn bấm nút quét Top 10.
+            Danh sách Top 10 lấy theo market mặc định của hệ thống.
           </CardDescription>
         </CardHeader>
 
@@ -370,37 +417,39 @@ export function ScannerClient() {
                 />
               </div>
             </div>
-            {state.market === "CRYPTO" ? (
-              <div className="flex gap-2 pt-1">
-                <Input
-                  className="num"
-                  placeholder="Hoặc gõ symbol tùy chọn (vd: SUIUSDT)"
-                  value={customSymbol}
-                  onChange={(e) => setCustomSymbol(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") {
-                      e.preventDefault();
-                      if (customSymbol.trim()) {
-                        addSymbol(customSymbol);
-                        setCustomSymbol("");
-                      }
-                    }
-                  }}
-                />
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => {
+            <div className="flex gap-2 pt-1">
+              <Input
+                className="num"
+                placeholder={
+                  state.market === "CRYPTO"
+                    ? "Hoặc gõ symbol tùy chọn (vd: SUIUSDT)"
+                    : "Hoặc gõ symbol tùy chọn (vd: EURUSD)"
+                }
+                value={customSymbol}
+                onChange={(e) => setCustomSymbol(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
                     if (customSymbol.trim()) {
                       addSymbol(customSymbol);
                       setCustomSymbol("");
                     }
-                  }}
-                >
-                  <Plus className="size-4" />
-                </Button>
-              </div>
-            ) : null}
+                  }
+                }}
+              />
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => {
+                  if (customSymbol.trim()) {
+                    addSymbol(customSymbol);
+                    setCustomSymbol("");
+                  }
+                }}
+              >
+                <Plus className="size-4" />
+              </Button>
+            </div>
 
             {state.symbols.length === 0 ? (
               <p className="pt-1 text-xs text-muted-foreground">
@@ -523,9 +572,22 @@ export function ScannerClient() {
                 : "Quét Top 10 đồng thuận"}
             </Button>
             <p className="text-center text-xs text-muted-foreground">
-              Nút Top 10 chỉ dùng cho Crypto và chỉ chạy khi bạn chủ động bấm.
-              Mặc định hệ thống chỉ quét danh sách coin/symbol đã chọn.
+              Nút Top 10 dùng danh sách mặc định theo market và chỉ chạy khi
+              bạn chủ động bấm. Mặc định hệ thống chỉ quét danh sách
+              coin/symbol đã chọn.
             </p>
+            {errorMessage ? (
+              <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">
+                <div className="font-medium">Lỗi quét: {errorMessage}</div>
+                {errorMessage.toLowerCase().includes("twelve data") ||
+                errorMessage.toLowerCase().includes("giới hạn") ? (
+                  <div className="mt-1 text-destructive/80">
+                    Forex intraday có thể bị giới hạn. Hãy thử lại sau hoặc
+                    dùng khung 1D/1W/1M.
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
           </div>
         </CardContent>
       </Card>
@@ -538,6 +600,8 @@ export function ScannerClient() {
         chartSelection={chartSelection}
         chartVisible={chartVisible}
         chartHeight={chartHeight}
+        rsiHeight={rsiHeight}
+        onRsiHeightChange={setRsiHeight}
         onToggleChart={() => setChartVisible((visible) => !visible)}
         onChartHeightChange={setChartHeight}
         onSelectChart={selectChart}
@@ -554,6 +618,8 @@ function ResultsPanel({
   chartSelection,
   chartVisible,
   chartHeight,
+  rsiHeight,
+  onRsiHeightChange,
   onToggleChart,
   onChartHeightChange,
   onSelectChart,
@@ -565,6 +631,8 @@ function ResultsPanel({
   chartSelection: ChartSelection | null;
   chartVisible: boolean;
   chartHeight: number;
+  rsiHeight: number;
+  onRsiHeightChange: (height: number) => void;
   onToggleChart: () => void;
   onChartHeightChange: (height: number) => void;
   onSelectChart: (selection: ChartSelection) => void;
@@ -669,9 +737,10 @@ function ResultsPanel({
             selection={chartSelection}
             visible={chartVisible}
             height={chartHeight}
+            rsiHeight={rsiHeight}
+            onRsiHeightChange={onRsiHeightChange}
             onToggleVisible={onToggleChart}
             onHeightChange={onChartHeightChange}
-            onSelectChart={onSelectChart}
           />
         </div>
       </CardContent>
@@ -785,26 +854,39 @@ function ConsensusTopRow({
   timeframe: Timeframe;
   onSelectChart: (selection: ChartSelection) => void;
 }) {
+  const chartUrl = tradingViewUrl({ symbol: row.symbol, market, timeframe });
+
   return (
-    <button
-      type="button"
-      className="flex w-full items-center gap-2 rounded-md border bg-background/60 px-2.5 py-2 text-left transition-colors hover:bg-muted/60"
-      onClick={() => onSelectChart({ symbol: row.symbol, market, timeframe })}
-    >
-      <span className="num w-5 text-xs tabular-nums text-muted-foreground">
-        #{index + 1}
-      </span>
-      <span className="font-mono text-sm font-medium">{row.symbol}</span>
-      <span className="ml-auto">
-        <ScoreBar value={row.score} />
-      </span>
-    </button>
+    <div className="flex w-full items-center gap-2 rounded-md border bg-background/60 px-2.5 py-2">
+      <button
+        type="button"
+        className="flex flex-1 items-center gap-2 text-left transition-colors hover:text-foreground"
+        onClick={() => onSelectChart({ symbol: row.symbol, market, timeframe })}
+      >
+        <span className="num w-5 text-xs tabular-nums text-muted-foreground">
+          #{index + 1}
+        </span>
+        <span className="font-mono text-sm font-medium">{row.symbol}</span>
+      </button>
+      <a
+        href={chartUrl}
+        target="_blank"
+        rel="noreferrer"
+        className="inline-flex items-center rounded-md border p-1.5 text-muted-foreground transition-colors hover:text-foreground"
+        onClick={(event) => event.stopPropagation()}
+        aria-label={`Mở chart ${row.symbol}`}
+      >
+        <ExternalLink className="size-3" />
+      </a>
+    </div>
   );
 }
 
 function tradingViewSymbol(selection: ChartSelection): string {
-  if (selection.market === "CRYPTO") return `BINANCE:${selection.symbol}`;
-  return `FX_IDC:${selection.symbol}`;
+  const raw = selection.symbol.toUpperCase().replace("/", "");
+  if (raw.includes(":")) return raw;
+  if (selection.market === "CRYPTO") return `BINANCE:${raw}`;
+  return `OANDA:${raw}`;
 }
 
 function tradingViewInterval(timeframe: Timeframe): string {
@@ -822,20 +904,114 @@ function tradingViewUrl(selection: ChartSelection): string {
   return `https://www.tradingview.com/chart/?symbol=${symbol}&interval=${tradingViewInterval(selection.timeframe)}`;
 }
 
+type RsiPoint = {
+  index: number;
+  rsi: number | null;
+  ema: number | null;
+  wma: number | null;
+};
+
+function computeRsi(closes: number[], length: number): Array<number | null> {
+  if (closes.length < length + 1) {
+    return closes.map(() => null);
+  }
+
+  const out: Array<number | null> = Array(closes.length).fill(null);
+  let gains = 0;
+  let losses = 0;
+
+  for (let i = 1; i <= length; i++) {
+    const diff = closes[i] - closes[i - 1];
+    if (diff >= 0) gains += diff;
+    else losses -= diff;
+  }
+
+  let avgGain = gains / length;
+  let avgLoss = losses / length;
+  const rs = avgLoss === 0 ? 100 : avgGain / avgLoss;
+  out[length] = 100 - 100 / (1 + rs);
+
+  for (let i = length + 1; i < closes.length; i++) {
+    const diff = closes[i] - closes[i - 1];
+    const gain = diff > 0 ? diff : 0;
+    const loss = diff < 0 ? -diff : 0;
+    avgGain = (avgGain * (length - 1) + gain) / length;
+    avgLoss = (avgLoss * (length - 1) + loss) / length;
+    const nextRs = avgLoss === 0 ? 100 : avgGain / avgLoss;
+    out[i] = 100 - 100 / (1 + nextRs);
+  }
+
+  return out;
+}
+
+function computeEma(values: Array<number | null>, length: number) {
+  const out: Array<number | null> = Array(values.length).fill(null);
+  const alpha = 2 / (length + 1);
+  let prev: number | null = null;
+
+  for (let i = 0; i < values.length; i++) {
+    const v = values[i];
+    if (v === null) continue;
+    if (prev === null) {
+      prev = v;
+    } else {
+      prev = v * alpha + prev * (1 - alpha);
+    }
+    out[i] = prev;
+  }
+
+  return out;
+}
+
+function computeWma(values: Array<number | null>, length: number) {
+  const out: Array<number | null> = Array(values.length).fill(null);
+  const weightSum = (length * (length + 1)) / 2;
+
+  for (let i = length - 1; i < values.length; i++) {
+    let acc = 0;
+    let valid = true;
+    for (let j = 0; j < length; j++) {
+      const v = values[i - j];
+      if (v === null) {
+        valid = false;
+        break;
+      }
+      acc += v * (length - j);
+    }
+    if (valid) out[i] = acc / weightSum;
+  }
+
+  return out;
+}
+
+function buildRsiSeries(closes: number[]): RsiPoint[] {
+  const rsi = computeRsi(closes, 14);
+  const ema = computeEma(rsi, 9);
+  const wma = computeWma(rsi, 45);
+  return closes.map((_, index) => ({
+    index: index + 1,
+    rsi: rsi[index] ?? null,
+    ema: ema[index] ?? null,
+    wma: wma[index] ?? null,
+  }));
+}
+
 function TradingViewPanel({
   selection,
   visible,
   height,
+  rsiHeight,
+  onRsiHeightChange,
   onToggleVisible,
   onHeightChange,
-  onSelectChart,
 }: {
   selection: ChartSelection | null;
   visible: boolean;
   height: number;
+  rsiHeight: number;
+  onRsiHeightChange: (height: number) => void;
   onToggleVisible: () => void;
   onHeightChange: (height: number) => void;
-  onSelectChart: (selection: ChartSelection) => void;
 }) {
   const startResize = React.useCallback(
     (event: React.PointerEvent<HTMLButtonElement>) => {
@@ -909,25 +1085,10 @@ function TradingViewPanel({
             {tradingViewSymbol(selection)}
           </div>
           <div className="text-xs text-muted-foreground">
-            TradingView · {selection.timeframe} · RSI(14), EMA(9), WMA(45)
-            trên RSI
+            TradingView · RSI(14), EMA(9), WMA(45) trên RSI
           </div>
         </div>
         <div className="flex flex-wrap items-center justify-end gap-2">
-          <div className="flex flex-wrap gap-1">
-            {ALL_TIMEFRAMES.map((tf) => (
-              <Button
-                key={tf}
-                type="button"
-                size="sm"
-                variant={selection.timeframe === tf ? "default" : "outline"}
-                onClick={() => onSelectChart({ ...selection, timeframe: tf })}
-                className="h-8 px-2 font-mono text-[11px]"
-              >
-                {tf}
-              </Button>
-            ))}
-          </div>
           <Button
             type="button"
             size="sm"
@@ -959,7 +1120,16 @@ function TradingViewPanel({
       </div>
       {visible ? (
         <>
-          <TradingViewWidget selection={selection} height={height} />
+          <TradingViewWidget
+            key={`${selection.market}-${selection.symbol}-${selection.timeframe}`}
+            selection={selection}
+            height={height}
+          />
+          <RsiPanel
+            selection={selection}
+            height={rsiHeight}
+            onHeightChange={onRsiHeightChange}
+          />
           <button
             type="button"
             className="flex h-8 w-full cursor-ns-resize items-center justify-center rounded-b-lg border-t bg-muted/30 text-[11px] text-muted-foreground transition-colors hover:bg-muted/60"
@@ -986,65 +1156,169 @@ function TradingViewWidget({
   selection: ChartSelection;
   height: number;
 }) {
-  const containerRef = React.useRef<HTMLDivElement | null>(null);
-
-  React.useEffect(() => {
-    const container = containerRef.current;
-    if (!container) return;
-
-    const chartHeight = `${height}px`;
-    container.style.height = chartHeight;
-    container.style.minHeight = chartHeight;
-
-    const widget = document.createElement("div");
-    widget.className = "tradingview-widget-container__widget";
-    widget.style.height = chartHeight;
-    widget.style.minHeight = chartHeight;
-    widget.style.width = "100%";
-    container.appendChild(widget);
-
-    const script = document.createElement("script");
-    script.src =
-      "https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js";
-    script.type = "text/javascript";
-    script.async = true;
-    script.innerHTML = JSON.stringify({
-      autosize: false,
-      width: "100%",
-      height: String(height),
-      symbol: tradingViewSymbol(selection),
-      interval: tradingViewInterval(selection.timeframe),
-      timezone: "Asia/Ho_Chi_Minh",
-      theme: "dark",
-      style: "1",
-      locale: "vi_VN",
-      allow_symbol_change: false,
-      calendar: false,
-      support_host: "https://www.tradingview.com",
-      studies: [
-        "RSI@tv-basicstudies",
-        "MAExp@tv-basicstudies",
-        "MAWeighted@tv-basicstudies",
-      ],
-      studies_overrides: {
-        "moving average exponential.length": 9,
-        "moving average weighted.length": 45,
-        "rsi.length": 14,
-      },
-    });
-    container.appendChild(script);
-
-    return () => {
-      container.innerHTML = "";
-    };
-  }, [height, selection]);
+  const src = `https://www.tradingview.com/widgetembed/?symbol=${encodeURIComponent(
+    tradingViewSymbol(selection),
+  )}&interval=${encodeURIComponent(
+    tradingViewInterval(selection.timeframe),
+  )}&theme=dark&style=1&timezone=Asia/Ho_Chi_Minh&withdateranges=1&locale=vi_VN`;
 
   return (
-    <div
-      ref={containerRef}
-      className="tradingview-widget-container overflow-hidden"
-      style={{ height, minHeight: height }}
-    />
+    <div className="overflow-hidden rounded-b-lg border-t" style={{ height }}>
+      <iframe
+        key={src}
+        src={src}
+        title="TradingView Preview"
+        className="h-full w-full"
+        allowTransparency
+        frameBorder="0"
+      />
+    </div>
+  );
+}
+
+function RsiPanel({
+  selection,
+  height,
+  onHeightChange,
+}: {
+  selection: ChartSelection;
+  height: number;
+  onHeightChange: (height: number) => void;
+}) {
+  const startResize = React.useCallback(
+    (event: React.PointerEvent<HTMLButtonElement>) => {
+      event.preventDefault();
+
+      const startY = event.clientY;
+      const startHeight = height;
+      const pointerId = event.pointerId;
+      const target = event.currentTarget;
+      target.setPointerCapture(pointerId);
+
+      const onPointerMove = (moveEvent: PointerEvent) => {
+        const nextHeight = Math.min(
+          MAX_RSI_HEIGHT,
+          Math.max(MIN_RSI_HEIGHT, startHeight + moveEvent.clientY - startY),
+        );
+        onHeightChange(nextHeight);
+      };
+
+      const onPointerUp = (upEvent: PointerEvent) => {
+        target.releasePointerCapture(pointerId);
+        window.removeEventListener("pointermove", onPointerMove);
+        window.removeEventListener("pointerup", onPointerUp);
+
+        const nextHeight = Math.min(
+          MAX_RSI_HEIGHT,
+          Math.max(MIN_RSI_HEIGHT, startHeight + upEvent.clientY - startY),
+        );
+        window.localStorage.setItem(
+          RSI_HEIGHT_STORAGE_KEY,
+          String(nextHeight),
+        );
+      };
+
+      window.addEventListener("pointermove", onPointerMove);
+      window.addEventListener("pointerup", onPointerUp);
+    },
+    [height, onHeightChange],
+  );
+
+  const rsiQuery = useQuery({
+    queryKey: [
+      "scanner-rsi",
+      selection.market,
+      selection.symbol,
+      selection.timeframe,
+    ],
+    queryFn: async () => {
+      const res = await fetch("/api/scanner/candles", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          market: selection.market,
+          symbol: selection.symbol,
+          timeframe: selection.timeframe,
+          limit: 200,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Tải RSI thất bại");
+      return data as { closes: number[] };
+    },
+  });
+
+  const series = React.useMemo(() => {
+    if (!rsiQuery.data?.closes?.length) return [];
+    return buildRsiSeries(rsiQuery.data.closes);
+  }, [rsiQuery.data]);
+
+  return (
+    <div className="border-t bg-card/50 px-3 py-3">
+      <div className="mb-2 text-xs text-muted-foreground">
+        RSI(14) + EMA(9) + WMA(45) trên RSI
+      </div>
+      <div style={{ height }} className="w-full">
+        {rsiQuery.isLoading ? (
+          <div className="grid h-full place-items-center rounded-md border border-dashed text-xs text-muted-foreground">
+            Đang tải RSI…
+          </div>
+        ) : rsiQuery.isError ? (
+          <div className="grid h-full place-items-center rounded-md border border-dashed text-xs text-destructive">
+            {(rsiQuery.error as Error).message}
+          </div>
+        ) : (
+          <ResponsiveContainer width="100%" height="100%">
+            <LineChart data={series} margin={{ left: 0, right: 8, top: 8, bottom: 0 }}>
+              <XAxis dataKey="index" hide />
+              <YAxis domain={[0, 100]} tick={{ fontSize: 10 }} />
+              <Tooltip
+                formatter={(value) =>
+                  typeof value === "number" ? value.toFixed(2) : value
+                }
+                labelFormatter={() => ""}
+              />
+              <ReferenceLine y={70} stroke="#9ca3af" strokeDasharray="4 4" />
+              <ReferenceLine y={30} stroke="#9ca3af" strokeDasharray="4 4" />
+              <ReferenceLine y={50} stroke="#9ca3af" strokeDasharray="2 4" />
+              <Line
+                type="monotone"
+                dataKey="rsi"
+                stroke="#E040FB"
+                strokeWidth={1}
+                dot={false}
+                name="RSI"
+              />
+              <Line
+                type="monotone"
+                dataKey="ema"
+                stroke="#22c55e"
+                strokeWidth={2}
+                dot={false}
+                name="EMA 9"
+              />
+              <Line
+                type="monotone"
+                dataKey="wma"
+                stroke="#2563eb"
+                strokeWidth={2}
+                dot={false}
+                name="WMA 45"
+              />
+            </LineChart>
+          </ResponsiveContainer>
+        )}
+      </div>
+      <button
+        type="button"
+        className="mt-2 flex h-7 w-full cursor-ns-resize items-center justify-center rounded-md border bg-muted/30 text-[11px] text-muted-foreground transition-colors hover:bg-muted/60"
+        onPointerDown={startResize}
+        aria-label="Kéo để đổi chiều cao RSI"
+        title="Kéo lên/xuống để đổi chiều cao RSI"
+      >
+        Kéo để đổi chiều cao RSI · {height}px
+      </button>
+    </div>
   );
 }
 
@@ -1085,7 +1359,9 @@ function SummaryRow({
             onSelectChart({
               symbol: row.symbol,
               market,
-              timeframe: timeframes[0] ?? "1h",
+              timeframe: ALL_TIMEFRAMES.includes(timeframes[0] ?? "1h")
+                ? (timeframes[0] ?? "1h")
+                : DEFAULT_CHART_TIMEFRAME,
             })
           }
         >

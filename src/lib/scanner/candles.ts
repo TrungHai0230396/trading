@@ -200,8 +200,25 @@ async function fetchTwelveDataCloses(
     | { code: number; message: string; status: string };
 
   if ("code" in data) {
+    const rawMessage = data.message ?? "Twelve Data lỗi không xác định.";
+    const normalized = rawMessage.toLowerCase();
+    const isLimitError =
+      normalized.includes("limit") ||
+      normalized.includes("quota") ||
+      normalized.includes("usage") ||
+      normalized.includes("per minute") ||
+      normalized.includes("api call") ||
+      normalized.includes("requests");
+
+    if (isLimitError) {
+      throw new CandleFetchError(
+        "Twelve Data đã giới hạn truy cập intraday. Vui lòng thử lại sau hoặc dùng khung 1D/1W/1M.",
+        typeof data.code === "number" ? data.code : undefined,
+      );
+    }
+
     throw new CandleFetchError(
-      `Twelve Data: ${data.message}`,
+      `Twelve Data: ${rawMessage}`,
       typeof data.code === "number" ? data.code : undefined,
     );
   }

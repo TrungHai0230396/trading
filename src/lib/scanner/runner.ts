@@ -9,6 +9,7 @@
 import { db } from "@/lib/db";
 import { MarketType } from "@/generated/prisma";
 import { getTopBinanceUsdtSymbols } from "@/lib/quotes/binance";
+import { getCurated } from "@/lib/insights/curated";
 import {
   getCandles,
   isTimeframe,
@@ -63,6 +64,18 @@ export type ScanResult = {
 };
 
 const CONCURRENCY = 5;
+
+async function getConsensusUniverse(market: Market): Promise<string[]> {
+  if (market === "CRYPTO") {
+    try {
+      return await getTopBinanceUsdtSymbols(100);
+    } catch {
+      return [...getCurated("CRYPTO")];
+    }
+  }
+
+  return [...getCurated("FOREX")];
+}
 
 function aggregateSignal(signals: Signal[]): Signal {
   let bull = 0;
@@ -271,8 +284,8 @@ export async function runScan(opts: {
 
   let consensusTop: ScanResult["consensusTop"];
 
-  if (opts.includeConsensusTop && opts.market === "CRYPTO") {
-    const consensusUniverse = await getTopBinanceUsdtSymbols(100);
+  if (opts.includeConsensusTop) {
+    const consensusUniverse = await getConsensusUniverse(opts.market);
 
     const consensusSummary = await processBatch(
       consensusUniverse,
