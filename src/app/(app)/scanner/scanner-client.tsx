@@ -42,6 +42,9 @@ import {
   type Timeframe,
 } from "@/lib/scanner/candles";
 import { DEFAULT_STRATEGY } from "@/lib/scanner/strategies";
+import { ema } from "@/lib/indicators/ema";
+import { rsi } from "@/lib/indicators/rsi";
+import { wma } from "@/lib/indicators/wma";
 import type {
   ConsensusTopEntry,
   PerTimeframeResult,
@@ -239,9 +242,6 @@ export function ScannerClient() {
     if (!hydrated) return;
     window.localStorage.setItem(RSI_HEIGHT_STORAGE_KEY, String(rsiHeight));
   }, [hydrated, rsiHeight]);
-
-  const update = <K extends keyof FormState>(key: K, value: FormState[K]) =>
-    setState((s) => ({ ...s, [key]: value }));
 
   const selectChart = React.useCallback((selection: ChartSelection) => {
     const normalized = normalizeChartSelection(selection);
@@ -537,20 +537,6 @@ export function ScannerClient() {
             </div>
           </div>
 
-          <div className="space-y-1.5">
-            <Label>Số nến mỗi TF</Label>
-            <Input
-              inputMode="numeric"
-              className="num"
-              value={state.limitPerTF}
-              onChange={(e) => update("limitPerTF", e.target.value)}
-              placeholder="200"
-            />
-            <p className="text-xs text-muted-foreground">
-              50–1000. Mặc định 200, đủ cho EMA/WMA dài.
-            </p>
-          </div>
-
           <div className="space-y-2">
             <Button
               type="button"
@@ -601,6 +587,7 @@ export function ScannerClient() {
         chartVisible={chartVisible}
         chartHeight={chartHeight}
         rsiHeight={rsiHeight}
+        limitPerTF={Number(state.limitPerTF) || 200}
         onRsiHeightChange={setRsiHeight}
         onToggleChart={() => setChartVisible((visible) => !visible)}
         onChartHeightChange={setChartHeight}
@@ -619,6 +606,7 @@ function ResultsPanel({
   chartVisible,
   chartHeight,
   rsiHeight,
+  limitPerTF,
   onRsiHeightChange,
   onToggleChart,
   onChartHeightChange,
@@ -632,6 +620,7 @@ function ResultsPanel({
   chartVisible: boolean;
   chartHeight: number;
   rsiHeight: number;
+  limitPerTF: number;
   onRsiHeightChange: (height: number) => void;
   onToggleChart: () => void;
   onChartHeightChange: (height: number) => void;
@@ -738,9 +727,12 @@ function ResultsPanel({
             visible={chartVisible}
             height={chartHeight}
             rsiHeight={rsiHeight}
+            limitPerTF={limitPerTF}
             onRsiHeightChange={onRsiHeightChange}
             onToggleVisible={onToggleChart}
             onHeightChange={onChartHeightChange}
+            timeframes={timeframes}
+            onSelectChart={onSelectChart}
           />
         </div>
       </CardContent>
@@ -911,88 +903,15 @@ type RsiPoint = {
   wma: number | null;
 };
 
-function computeRsi(closes: number[], length: number): Array<number | null> {
-  if (closes.length < length + 1) {
-    return closes.map(() => null);
-  }
-
-  const out: Array<number | null> = Array(closes.length).fill(null);
-  let gains = 0;
-  let losses = 0;
-
-  for (let i = 1; i <= length; i++) {
-    const diff = closes[i] - closes[i - 1];
-    if (diff >= 0) gains += diff;
-    else losses -= diff;
-  }
-
-  let avgGain = gains / length;
-  let avgLoss = losses / length;
-  const rs = avgLoss === 0 ? 100 : avgGain / avgLoss;
-  out[length] = 100 - 100 / (1 + rs);
-
-  for (let i = length + 1; i < closes.length; i++) {
-    const diff = closes[i] - closes[i - 1];
-    const gain = diff > 0 ? diff : 0;
-    const loss = diff < 0 ? -diff : 0;
-    avgGain = (avgGain * (length - 1) + gain) / length;
-    avgLoss = (avgLoss * (length - 1) + loss) / length;
-    const nextRs = avgLoss === 0 ? 100 : avgGain / avgLoss;
-    out[i] = 100 - 100 / (1 + nextRs);
-  }
-
-  return out;
-}
-
-function computeEma(values: Array<number | null>, length: number) {
-  const out: Array<number | null> = Array(values.length).fill(null);
-  const alpha = 2 / (length + 1);
-  let prev: number | null = null;
-
-  for (let i = 0; i < values.length; i++) {
-    const v = values[i];
-    if (v === null) continue;
-    if (prev === null) {
-      prev = v;
-    } else {
-      prev = v * alpha + prev * (1 - alpha);
-    }
-    out[i] = prev;
-  }
-
-  return out;
-}
-
-function computeWma(values: Array<number | null>, length: number) {
-  const out: Array<number | null> = Array(values.length).fill(null);
-  const weightSum = (length * (length + 1)) / 2;
-
-  for (let i = length - 1; i < values.length; i++) {
-    let acc = 0;
-    let valid = true;
-    for (let j = 0; j < length; j++) {
-      const v = values[i - j];
-      if (v === null) {
-        valid = false;
-        break;
-      }
-      acc += v * (length - j);
-    }
-    if (valid) out[i] = acc / weightSum;
-  }
-
-  return out;
-}
-
 function buildRsiSeries(closes: number[]): RsiPoint[] {
-  const rsi = computeRsi(closes, 14);
-  const ema = computeEma(rsi, 9);
-  const wma = computeWma(rsi, 45);
+  const rsiSeries = rsi(closes, 14);
+  const emaSeries = ema(rsiSeries, 9);
+  const wmaSeries = wma(rsiSeries, 45);
   return closes.map((_, index) => ({
     index: index + 1,
-    rsi: rsi[index] ?? null,
-    ema: ema[index] ?? null,
-    wma: wma[index] ?? null,
+    rsi: Number.isFinite(rsiSeries[index]) ? rsiSeries[index] : null,
+    ema: Number.isFinite(emaSeries[index]) ? emaSeries[index] : null,
+    wma: Number.isFinite(wmaSeries[index]) ? wmaSeries[index] : null,
   }));
 }
 
@@ -1001,17 +920,23 @@ function TradingViewPanel({
   visible,
   height,
   rsiHeight,
+  limitPerTF,
   onRsiHeightChange,
   onToggleVisible,
   onHeightChange,
+  timeframes,
+  onSelectChart,
 }: {
   selection: ChartSelection | null;
   visible: boolean;
   height: number;
   rsiHeight: number;
+  limitPerTF: number;
   onRsiHeightChange: (height: number) => void;
   onToggleVisible: () => void;
   onHeightChange: (height: number) => void;
+  timeframes: Timeframe[];
+  onSelectChart: (selection: ChartSelection) => void;
 }) {
   const startResize = React.useCallback(
     (event: React.PointerEvent<HTMLButtonElement>) => {
@@ -1089,6 +1014,19 @@ function TradingViewPanel({
           </div>
         </div>
         <div className="flex flex-wrap items-center justify-end gap-2">
+          <div className="flex flex-wrap items-center gap-1">
+            {timeframes.map((tf) => (
+              <Button
+                key={tf}
+                type="button"
+                size="xs"
+                variant={tf === selection.timeframe ? "secondary" : "outline"}
+                onClick={() => onSelectChart({ ...selection, timeframe: tf })}
+              >
+                {tf}
+              </Button>
+            ))}
+          </div>
           <Button
             type="button"
             size="sm"
@@ -1128,6 +1066,7 @@ function TradingViewPanel({
           <RsiPanel
             selection={selection}
             height={rsiHeight}
+            limit={limitPerTF}
             onHeightChange={onRsiHeightChange}
           />
           <button
@@ -1179,10 +1118,12 @@ function TradingViewWidget({
 function RsiPanel({
   selection,
   height,
+  limit,
   onHeightChange,
 }: {
   selection: ChartSelection;
   height: number;
+  limit: number;
   onHeightChange: (height: number) => void;
 }) {
   const startResize = React.useCallback(
@@ -1230,6 +1171,7 @@ function RsiPanel({
       selection.market,
       selection.symbol,
       selection.timeframe,
+      limit,
     ],
     queryFn: async () => {
       const res = await fetch("/api/scanner/candles", {
@@ -1239,7 +1181,7 @@ function RsiPanel({
           market: selection.market,
           symbol: selection.symbol,
           timeframe: selection.timeframe,
-          limit: 200,
+          limit,
         }),
       });
       const data = await res.json();

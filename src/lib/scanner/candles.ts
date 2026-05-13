@@ -86,10 +86,11 @@ async function getBinanceCloses(
 ): Promise<number[]> {
   const sym = symbol.toUpperCase().replace("/", "");
   const interval = BINANCE_INTERVAL[timeframe];
+  const requestLimit = Math.min(1000, limit + 1);
   const url = new URL("https://api.binance.com/api/v3/klines");
   url.searchParams.set("symbol", sym);
   url.searchParams.set("interval", interval);
-  url.searchParams.set("limit", String(limit));
+  url.searchParams.set("limit", String(requestLimit));
 
   const res = await fetch(url, { next: { revalidate: 60 } });
   if (!res.ok) {
@@ -121,7 +122,8 @@ async function getBinanceCloses(
       `Binance không trả về nến cho ${sym} ${interval}.`,
     );
   }
-  return closes;
+  if (closes.length > 1) closes.pop();
+  return closes.slice(-limit);
 }
 
 // ─── Twelve Data ──────────────────────────────────────────────────────
@@ -181,10 +183,11 @@ async function fetchTwelveDataCloses(
   interval: string,
   limit: number,
 ): Promise<number[]> {
+  const requestLimit = Math.min(1000, limit + 1);
   const url = new URL("https://api.twelvedata.com/time_series");
   url.searchParams.set("symbol", tdSym);
   url.searchParams.set("interval", interval);
-  url.searchParams.set("outputsize", String(limit));
+  url.searchParams.set("outputsize", String(requestLimit));
   url.searchParams.set("apikey", twelveDataKey());
 
   const res = await fetch(url, { next: { revalidate: 60 } });
@@ -241,5 +244,6 @@ async function fetchTwelveDataCloses(
       `Twelve Data trả về dữ liệu không hợp lệ cho ${tdSym}.`,
     );
   }
-  return closes;
+  if (closes.length > 1) closes.pop();
+  return closes.slice(-limit);
 }

@@ -154,7 +154,7 @@ model TradeJournalTag {
 model TradeScreenshot {
   id        String   @id @default(cuid())
   tradeId   String
-  url       String   @db.Text
+  url       String   @db.LongText
   caption   String?
   kind      String? // before, during, after
   createdAt DateTime @default(now())

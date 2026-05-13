@@ -19,8 +19,8 @@ AI-summarized news and on-chain analysis — in one place.
 |-------|-------|
 | **P1 — Foundation** ✅ | Scaffold, design system, MySQL, auth, app shell, route stubs |
 | **P2** | Position size calculator (live FX/crypto rates) |
-| **P3** | Trading journal (CRUD, screenshots, R-multiple, stats) |
-| **P4** | Multi-timeframe scanner (RSI/EMA/MACD, alignment scoring) |
+| **P3** | Trading journal (CRUD, screenshots upload/paste, captions/kind, fullscreen preview) |
+| **P4** | Multi-timeframe scanner (RSI(14) + EMA(9)/WMA(45) on RSI, alignment scoring, Top 10 consensus) |
 | **P5** | News + AI (CryptoPanic + Gemini) |
 | **P6** | On-chain analysis (ETH + BSC + DefiLlama + Gemini) |
 | **P7** | Dashboard wired to real data |

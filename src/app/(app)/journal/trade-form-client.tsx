@@ -1,11 +1,12 @@
 "use client";
 
 import * as React from "react";
+import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { ArrowLeft, Save, Trash2 } from "lucide-react";
+import { ArrowLeft, ChevronLeft, ChevronRight, Download, Save, Trash2, X } from "lucide-react";
 
 import {
   Card,
@@ -14,7 +15,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -29,6 +30,7 @@ import { Separator } from "@/components/ui/separator";
 import { Badge } from "@/components/ui/badge";
 import {
   Dialog,
+  DialogClose,
   DialogContent,
   DialogDescription,
   DialogFooter,
@@ -65,6 +67,19 @@ type FormState = {
   mistakes: string;
   emotion: string;
   tagNames: string;
+};
+
+type ScreenshotItem = TradeDetail["screenshots"][number];
+
+const MAX_SCREENSHOT_BYTES = 4 * 1024 * 1024; // 4MB
+const SCREENSHOT_KINDS = ["before", "during", "after"] as const;
+
+const screenshotLoader = ({ src }: { src: string }) => src;
+const screenshotKindLabel = (kind?: ScreenshotItem["kind"] | null) => {
+  if (!kind) return null;
+  if (kind === "before") return "Trước lệnh";
+  if (kind === "during") return "Trong lệnh";
+  return "Sau lệnh";
 };
 
 const num = (s: string): number => Number(String(s).replace(",", "."));
@@ -155,6 +170,53 @@ export function TradeFormClient({
   const [state, setState] = React.useState<FormState>(() =>
     trade ? fromTrade(trade) : INITIAL,
   );
+  const [screenshots, setScreenshots] = React.useState<ScreenshotItem[]>(
+    trade?.screenshots ?? [],
+  );
+  const [uploadCaption, setUploadCaption] = React.useState("");
+  const [uploadKind, setUploadKind] = React.useState<"" | "before" | "during" | "after">("");
+  const [uploadUrl, setUploadUrl] = React.useState("");
+  const [fileInputKey, setFileInputKey] = React.useState(0);
+  const fileInputRef = React.useRef<HTMLInputElement | null>(null);
+  const [previewIndex, setPreviewIndex] = React.useState<number | null>(null);
+  const safePreviewIndex =
+    previewIndex !== null && previewIndex < screenshots.length
+      ? previewIndex
+      : null;
+  const previewShot =
+    safePreviewIndex !== null ? screenshots[safePreviewIndex] ?? null : null;
+
+  const handlePreviewKeyDown = React.useCallback(
+    (event: React.KeyboardEvent) => {
+      const isPrev =
+        event.key === "ArrowLeft" ||
+        event.key === "<" ||
+        event.key === "," ||
+        event.code === "Comma";
+      const isNext =
+        event.key === "ArrowRight" ||
+        event.key === ">" ||
+        event.key === "." ||
+        event.code === "Period";
+      if (isPrev) {
+        event.preventDefault();
+        setPreviewIndex((idx) =>
+          idx === null ? idx : Math.max(0, idx - 1),
+        );
+      } else if (isNext) {
+        event.preventDefault();
+        setPreviewIndex((idx) =>
+          idx === null
+            ? idx
+            : Math.min(screenshots.length - 1, idx + 1),
+        );
+      }
+    },
+    [screenshots.length],
+  );
+  const [editingCaptionId, setEditingCaptionId] = React.useState<string | null>(null);
+  const [editingCaption, setEditingCaption] = React.useState("");
+  const [editingKind, setEditingKind] = React.useState<"" | "before" | "during" | "after">("");
 
   const update = <K extends keyof FormState>(key: K, value: FormState[K]) =>
     setState((s) => ({ ...s, [key]: value }));
@@ -241,11 +303,144 @@ export function TradeFormClient({
     },
   });
 
+  const createScreenshot = useMutation({
+    mutationFn: async (payload: {
+      url: string;
+      caption?: string;
+      kind?: "before" | "during" | "after" | null;
+    }) => {
+      if (!trade) throw new Error("Cần lưu lệnh trước khi thêm ảnh");
+      const res = await fetch(`/api/journal/${trade.id}/screenshots`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(data?.error ?? "Không thể thêm ảnh");
+      return data as ScreenshotItem;
+    },
+    onSuccess: (shot) => {
+      setScreenshots((prev) => [...prev, shot]);
+      setUploadUrl("");
+      setUploadCaption("");
+      setUploadKind("");
+      setFileInputKey((k) => k + 1);
+      toast.success("Đã thêm ảnh");
+    },
+    onError: (err) => {
+      toast.error(err instanceof Error ? err.message : "Không thể thêm ảnh");
+    },
+  });
+
+  const deleteScreenshot = useMutation({
+    mutationFn: async (id: string) => {
+      if (!trade) throw new Error("Không tìm thấy lệnh");
+      const res = await fetch(`/api/journal/${trade.id}/screenshots/${id}`, {
+        method: "DELETE",
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(data?.error ?? "Không thể xoá ảnh");
+      return id;
+    },
+    onSuccess: (id) => {
+      setScreenshots((prev) => prev.filter((shot) => shot.id !== id));
+      toast.success("Đã xoá ảnh");
+    },
+    onError: (err) => {
+      toast.error(err instanceof Error ? err.message : "Không thể xoá ảnh");
+    },
+  });
+
+  const updateScreenshot = useMutation({
+    mutationFn: async ({
+      id,
+      caption,
+      kind,
+    }: {
+      id: string;
+      caption: string;
+      kind: "" | "before" | "during" | "after";
+    }) => {
+      if (!trade) throw new Error("Không tìm thấy lệnh");
+      const res = await fetch(`/api/journal/${trade.id}/screenshots/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ caption, kind: kind || null }),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(data?.error ?? "Không thể cập nhật ảnh");
+      return data as ScreenshotItem;
+    },
+    onSuccess: (shot) => {
+      setScreenshots((prev) =>
+        prev.map((item) =>
+          item.id === shot.id
+            ? { ...item, caption: shot.caption, kind: shot.kind }
+            : item,
+        ),
+      );
+      setEditingCaptionId(null);
+      setEditingCaption("");
+      setEditingKind("");
+      toast.success("Đã cập nhật ghi chú");
+    },
+    onError: (err) => {
+      toast.error(err instanceof Error ? err.message : "Không thể cập nhật ảnh");
+    },
+  });
+
+  const handleFile = React.useCallback(
+    (file: File) => {
+      if (file.size > MAX_SCREENSHOT_BYTES) {
+        toast.error("Ảnh vượt quá 4MB");
+        return;
+      }
+      if (!file.type.startsWith("image/")) {
+        toast.error("Chỉ chấp nhận tệp ảnh");
+        return;
+      }
+      const reader = new FileReader();
+      reader.onload = () => {
+        const url = String(reader.result ?? "");
+        if (!url) {
+          toast.error("Không đọc được ảnh");
+          return;
+        }
+        createScreenshot.mutate({
+          url,
+          caption: uploadCaption.trim() || undefined,
+          kind: uploadKind || null,
+        });
+      };
+      reader.onerror = () => {
+        toast.error("Không đọc được ảnh");
+      };
+      reader.readAsDataURL(file);
+    },
+    [createScreenshot, uploadCaption, uploadKind],
+  );
+
   const validForm =
     !empty(state.symbol) &&
     !empty(state.entryPrice) &&
     !empty(state.lotSize) &&
     !empty(state.openedAt);
+
+  const canUpload = mode === "edit" && !!trade;
+
+  const handlePaste = React.useCallback(
+    (event: React.ClipboardEvent<HTMLElement>) => {
+      if (!canUpload) return;
+      const items = Array.from(event.clipboardData?.items ?? []);
+      const imageItem = items.find((item) => item.type.startsWith("image/"));
+      if (!imageItem) return;
+      const file = imageItem.getAsFile();
+      if (!file) return;
+      event.preventDefault();
+      handleFile(file);
+    },
+    [canUpload, handleFile],
+  );
 
   return (
     <div className="space-y-4">
@@ -525,6 +720,365 @@ export function TradeFormClient({
           </CardContent>
         </Card>
       </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Ảnh giao dịch</CardTitle>
+          <CardDescription>
+            Đính kèm hình ảnh trước, trong hoặc sau khi vào lệnh.
+          </CardDescription>
+        </CardHeader>
+  <CardContent className="space-y-4" tabIndex={0}>
+          {!canUpload ? (
+            <div className="rounded-md border border-dashed p-3 text-sm text-muted-foreground">
+              Lưu lệnh trước khi thêm ảnh.
+            </div>
+          ) : (
+            <>
+              <div className="grid gap-3 lg:grid-cols-2">
+                <Field label="Dán ảnh nhanh">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Textarea
+                      rows={2}
+                      placeholder="Dán ảnh vào đây (Ctrl/Cmd + V)"
+                      className="min-h-[38px] flex-1 resize-none text-xs"
+                      onPaste={handlePaste}
+                      onChange={(e) => {
+                        e.currentTarget.value = "";
+                      }}
+                      aria-label="Dán ảnh vào đây"
+                    />
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={() => fileInputRef.current?.click()}
+                    >
+                      Chọn file
+                    </Button>
+                    <input
+                      ref={fileInputRef}
+                      key={fileInputKey}
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (file) handleFile(file);
+                        e.currentTarget.value = "";
+                      }}
+                    />
+                  </div>
+                </Field>
+                <Field label="Ảnh từ URL">
+                  <div className="flex gap-2">
+                    <Input
+                      value={uploadUrl}
+                      onChange={(e) => setUploadUrl(e.target.value)}
+                      placeholder="https://... hoặc data:image/..."
+                    />
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      disabled={!uploadUrl.trim() || createScreenshot.isPending}
+                      onClick={() =>
+                        createScreenshot.mutate({
+                          url: uploadUrl.trim(),
+                          caption: uploadCaption.trim() || undefined,
+                          kind: uploadKind || null,
+                        })
+                      }
+                    >
+                      Thêm
+                    </Button>
+                  </div>
+                </Field>
+              </div>
+              <div className="grid gap-3 lg:grid-cols-2">
+                <Field label="Ghi chú ảnh">
+                  <Input
+                    value={uploadCaption}
+                    onChange={(e) => setUploadCaption(e.target.value)}
+                    placeholder="Ví dụ: Điểm vào lệnh"
+                  />
+                </Field>
+                <Field label="Loại ảnh">
+                  <Select
+                    value={uploadKind}
+                    onValueChange={(v) =>
+                      setUploadKind(v as "" | "before" | "during" | "after")
+                    }
+                  >
+                    <SelectTrigger className="w-full">
+                      <SelectValue placeholder="Chọn loại" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="">Không phân loại</SelectItem>
+                      {SCREENSHOT_KINDS.map((kind) => (
+                        <SelectItem key={kind} value={kind}>
+                          {kind === "before"
+                            ? "Trước lệnh"
+                            : kind === "during"
+                              ? "Trong lệnh"
+                              : "Sau lệnh"}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </Field>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Ảnh tải lên giới hạn 4MB. Chỉ hỗ trợ định dạng ảnh (png, jpg,...).
+              </p>
+              <p className="text-xs text-muted-foreground">
+                Mẹo: có thể dán ảnh trực tiếp bằng Ctrl/Cmd + V.
+              </p>
+            </>
+          )}
+
+          {screenshots.length === 0 ? (
+            <div className="rounded-md border border-dashed p-3 text-xs text-muted-foreground">
+              Chưa có ảnh đính kèm.
+            </div>
+          ) : (
+            <>
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                {screenshots.map((shot, index) => {
+                  const isEditing = editingCaptionId === shot.id;
+                  return (
+                    <div
+                      key={shot.id}
+                      className="group relative overflow-hidden rounded-lg border bg-card/40"
+                    >
+                      <button
+                        type="button"
+                        className="relative h-40 w-full text-left"
+                        onClick={() => setPreviewIndex(index)}
+                        aria-label="Phóng to ảnh"
+                      >
+                        <Image
+                          src={shot.url}
+                          alt={shot.caption ?? "Trade screenshot"}
+                          fill
+                          className="object-cover"
+                          sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 33vw"
+                          loader={screenshotLoader}
+                          unoptimized
+                        />
+                        <span className="absolute inset-0 bg-black/10 opacity-0 transition group-hover:opacity-100" />
+                      </button>
+                      <button
+                        type="button"
+                        className="absolute right-2 top-2 rounded-full border bg-background/90 p-1 text-muted-foreground opacity-0 transition group-hover:opacity-100"
+                        onClick={() => deleteScreenshot.mutate(shot.id)}
+                        disabled={deleteScreenshot.isPending}
+                        aria-label="Xoá ảnh"
+                      >
+                        <X className="size-3" />
+                      </button>
+                      <div className="space-y-1 p-2 text-xs text-muted-foreground">
+                        {isEditing ? (
+                          <div className="space-y-2">
+                            <Input
+                              value={editingCaption}
+                              onChange={(e) => setEditingCaption(e.target.value)}
+                              placeholder="Ghi chú ảnh"
+                            />
+                            <Select
+                              value={editingKind}
+                              onValueChange={(value) =>
+                                setEditingKind(value as "" | "before" | "during" | "after")
+                              }
+                            >
+                              <SelectTrigger className="w-full">
+                                <SelectValue placeholder="Chọn loại" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="">Không phân loại</SelectItem>
+                                {SCREENSHOT_KINDS.map((kind) => (
+                                  <SelectItem key={kind} value={kind}>
+                                    {screenshotKindLabel(kind) ?? kind}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                            <div className="flex items-center gap-2">
+                              <Button
+                                type="button"
+                                size="xs"
+                                disabled={updateScreenshot.isPending}
+                                onClick={() =>
+                                  updateScreenshot.mutate({
+                                    id: shot.id,
+                                    caption: editingCaption,
+                                    kind: editingKind,
+                                  })
+                                }
+                              >
+                                Lưu
+                              </Button>
+                              <Button
+                                type="button"
+                                size="xs"
+                                variant="ghost"
+                                onClick={() => {
+                                  setEditingCaptionId(null);
+                                  setEditingCaption("");
+                                  setEditingKind("");
+                                }}
+                              >
+                                Hủy
+                              </Button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="font-medium text-foreground">
+                              {shot.caption || "(Không có ghi chú)"}
+                            </div>
+                            <Button
+                              type="button"
+                              size="xs"
+                              variant="ghost"
+                              onClick={() => {
+                                setEditingCaptionId(shot.id);
+                                setEditingCaption(shot.caption ?? "");
+                                setEditingKind((shot.kind ?? "") as "" | "before" | "during" | "after");
+                              }}
+                            >
+                              Sửa
+                            </Button>
+                          </div>
+                        )}
+                        {shot.kind ? (
+                          <div>{screenshotKindLabel(shot.kind)}</div>
+                        ) : null}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              <Dialog
+                open={!!previewShot}
+                onOpenChange={(open) => {
+                  if (!open) setPreviewIndex(null);
+                }}
+              >
+                <DialogContent
+                  showCloseButton={false}
+                  fullscreen
+                  className="flex flex-col gap-0 overflow-hidden bg-black p-0"
+                  onKeyDown={handlePreviewKeyDown}
+                >
+                  {/* Hidden accessible title for screen readers */}
+                  <DialogTitle className="sr-only">
+                    {previewShot?.caption || "Ảnh giao dịch"}
+                  </DialogTitle>
+                  <DialogDescription className="sr-only">
+                    {previewShot?.kind ? screenshotKindLabel(previewShot.kind) : "Xem ảnh fullscreen"}
+                  </DialogDescription>
+
+                  {previewShot ? (
+                    <div className="relative h-screen w-screen">
+                      {/* ── Main image ─────────────────────────────── */}
+                      <Image
+                        src={previewShot.url}
+                        alt={previewShot.caption ?? "Trade screenshot"}
+                        fill
+                        className="object-contain"
+                        sizes="100vw"
+                        loader={screenshotLoader}
+                        unoptimized
+                      />
+
+                      {/* ── Top bar: left=title+kind, right=download+counter+close ── */}
+                      <div className="absolute left-0 top-0 z-20 flex w-full items-center justify-between gap-3 bg-gradient-to-b from-black/70 to-transparent px-4 pb-6 pt-3">
+                        {/* Left: title + kind */}
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-semibold text-white drop-shadow">
+                            {previewShot.caption || "Ảnh giao dịch"}
+                          </p>
+                          {previewShot.kind ? (
+                            <p className="mt-0.5 text-xs text-white/70">
+                              {screenshotKindLabel(previewShot.kind)}
+                            </p>
+                          ) : null}
+                        </div>
+                        {/* Right: download + counter + close */}
+                        <div className="flex shrink-0 items-center gap-2">
+                          <a
+                            href={previewShot.url}
+                            download
+                            target="_blank"
+                            rel="noreferrer"
+                            className="flex items-center gap-1.5 rounded-full bg-white/15 px-3 py-1.5 text-xs font-medium text-white backdrop-blur-sm transition hover:bg-white/30"
+                            aria-label="Tải ảnh"
+                          >
+                            <Download className="size-3.5" />
+                            Tải ảnh
+                          </a>
+                          <div className="flex items-center gap-1.5 rounded-full bg-black/60 px-3 py-1.5 text-xs font-medium text-white backdrop-blur-sm">
+                            <span>{(safePreviewIndex ?? 0) + 1} / {screenshots.length}</span>
+                            <div className="mx-1 h-3 w-px bg-white/30" />
+                            <DialogClose
+                              render={
+                                <button
+                                  type="button"
+                                  className="flex items-center justify-center rounded-full p-0.5 transition hover:bg-white/20"
+                                  aria-label="Đóng"
+                                />
+                              }
+                            >
+                              <X className="size-3.5" />
+                            </DialogClose>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* ── Nav: Prev ───────────────────────────────── */}
+                      <button
+                        type="button"
+                        className="group absolute left-3 top-1/2 z-20 -translate-y-1/2 rounded-full bg-black/40 p-3 text-white backdrop-blur-sm transition hover:bg-black/70 disabled:pointer-events-none disabled:opacity-20"
+                        onClick={() =>
+                          setPreviewIndex((idx) =>
+                            idx !== null ? Math.max(0, idx - 1) : idx,
+                          )
+                        }
+                        disabled={safePreviewIndex === 0}
+                        aria-label="Ảnh trước"
+                      >
+                        <ChevronLeft className="size-6 transition group-hover:scale-110" />
+                      </button>
+
+                      {/* ── Nav: Next ───────────────────────────────── */}
+                      <button
+                        type="button"
+                        className="group absolute right-3 top-1/2 z-20 -translate-y-1/2 rounded-full bg-black/40 p-3 text-white backdrop-blur-sm transition hover:bg-black/70 disabled:pointer-events-none disabled:opacity-20"
+                        onClick={() =>
+                          setPreviewIndex((idx) =>
+                            idx !== null
+                              ? Math.min(screenshots.length - 1, idx + 1)
+                              : idx,
+                          )
+                        }
+                        disabled={
+                          safePreviewIndex === null ||
+                          safePreviewIndex >= screenshots.length - 1
+                        }
+                        aria-label="Ảnh tiếp theo"
+                      >
+                        <ChevronRight className="size-6 transition group-hover:scale-110" />
+                      </button>
+
+                    </div>
+                  ) : null}
+                </DialogContent>
+              </Dialog>
+            </>
+          )}
+        </CardContent>
+      </Card>
 
       <div className="flex items-center justify-end gap-2">
         <Button
