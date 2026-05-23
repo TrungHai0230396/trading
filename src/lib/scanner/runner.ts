@@ -65,6 +65,11 @@ export type ScanResult = {
 
 const CONCURRENCY = 5;
 
+// rsi_bot dùng limit=100 cho consensus scan (data/binance.py:40).
+// Để 2 hệ ra cùng kết quả, consensus path luôn dùng đúng con số này
+// thay vì dùng opts.limitPerTF (mặc định 200) như user-scan.
+const CONSENSUS_LIMIT = 100;
+
 async function getConsensusUniverse(market: Market): Promise<string[]> {
   if (market === "CRYPTO") {
     try {
@@ -297,7 +302,7 @@ export async function runScan(opts: {
           symbol,
           timeframes,
           indicators,
-          limit,
+          limit: CONSENSUS_LIMIT,
           persist: false,
         }),
     );
