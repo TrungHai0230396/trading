@@ -9,10 +9,12 @@ import {
 import { toast } from "sonner";
 import {
   ChevronDown,
-  Lock,
   Plus,
+  RefreshCw,
   Settings2,
   Sparkles,
+  TrendingDown,
+  TrendingUp,
   X,
 } from "lucide-react";
 
@@ -32,10 +34,6 @@ import { EmptyState } from "@/components/empty-state";
 import { InstrumentCombobox } from "@/components/instrument-combobox";
 import { cn } from "@/lib/utils";
 import {
-  CURATED_CRYPTO,
-  CURATED_FOREX,
-  isCurated as isCuratedSymbol,
-  mergeSymbols,
   normalizeSymbol,
   type InsightMarket,
 } from "@/lib/insights/curated";
@@ -75,6 +73,23 @@ type InsightItem = {
 type InsightRunResponse = {
   items: InsightItem[];
   errors: { symbol: string; message: string }[];
+  generatedAt: string;
+};
+
+type TopTrendEntry = {
+  symbol: string;
+  score: number;
+  alignment: "BULLISH" | "BEARISH" | "MIXED";
+  bullishCount: number;
+  bearishCount: number;
+  neutralCount: number;
+};
+
+type TopTrendResponse = {
+  market: InsightMarket;
+  timeframes: string[];
+  bullish: TopTrendEntry[];
+  bearish: TopTrendEntry[];
   generatedAt: string;
 };
 
@@ -138,7 +153,7 @@ export function InsightsClient() {
     Partial<Record<InsightMarket, InsightRunResponse>>
   >({});
 
-  // ── Watchlist ──────────────────────────────────────────────────────
+  // ── Watchlist (user picks, no curated lock) ────────────────────────
   const watchlistQ = useQuery({
     queryKey: ["watchlist", market],
     queryFn: async () => {
@@ -167,52 +182,27 @@ export function InsightsClient() {
     return map;
   }, [watchlistQ.data]);
 
-  const allSymbols: string[] = React.useMemo(
-    () => mergeSymbols(market, userSymbols),
-    [market, userSymbols],
-  );
-
-  // ── Watchlist mutations ────────────────────────────────────────────
-  const addMutation = useMutation({
-    mutationFn: async (raw: string) => {
-      const symbol = normalizeSymbol(raw);
-      if (!symbol) throw new Error("Symbol không hợp lệ");
-      const res = await fetch("/api/watchlist", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ market, symbol }),
-      });
+  // ── Top trend (auto-load per market) ───────────────────────────────
+  const topTrendQ = useQuery<TopTrendResponse>({
+    queryKey: ["top-trend", market],
+    queryFn: async () => {
+      const url = new URL("/api/insights/top-trend", window.location.origin);
+      url.searchParams.set("market", market);
+      const res = await fetch(url);
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "Thêm symbol thất bại");
-      return data as WatchlistItem;
+      if (!res.ok) {
+        throw new Error(data.error ?? "Tải top trend thất bại");
+      }
+      return data as TopTrendResponse;
     },
-    onSuccess: (item) => {
-      toast.success(`Đã thêm ${item.symbol}`);
-      qc.invalidateQueries({ queryKey: ["watchlist", market] });
-    },
-    onError: (err) =>
-      toast.error(err instanceof Error ? err.message : "Lỗi thêm symbol"),
+    staleTime: 5 * 60_000, // 5 min — scanning 100 coins is expensive
+    refetchOnWindowFocus: false,
   });
 
-  const removeMutation = useMutation({
-    mutationFn: async (id: string) => {
-      const res = await fetch(`/api/watchlist/${id}`, { method: "DELETE" });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error ?? "Xóa symbol thất bại");
-      return id;
-    },
-    onSuccess: () => {
-      toast.success("Đã xóa khỏi watchlist");
-      qc.invalidateQueries({ queryKey: ["watchlist", market] });
-    },
-    onError: (err) =>
-      toast.error(err instanceof Error ? err.message : "Lỗi xóa symbol"),
-  });
-
-  // ── Analyze ────────────────────────────────────────────────────────
+  // ── Analyze (batch — used by Phân tích button) ─────────────────────
   const analyzeMutation = useMutation({
-    mutationFn: async () => {
-      if (allSymbols.length === 0) {
+    mutationFn: async (symbols: string[]) => {
+      if (symbols.length === 0) {
         throw new Error("Chưa có symbol nào để phân tích");
       }
       const res = await fetch("/api/insights/analyze", {
@@ -220,7 +210,7 @@ export function InsightsClient() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           market,
-          symbols: allSymbols.slice(0, 20),
+          symbols: symbols.slice(0, 20),
         }),
       });
       const data = await res.json();
@@ -243,6 +233,92 @@ export function InsightsClient() {
       toast.error(err instanceof Error ? err.message : "Lỗi phân tích"),
   });
 
+  // ── Single-coin analyze (used by auto-analyze on add) ──────────────
+  // Appends/replaces the result in the current run instead of wiping
+  // the whole list, so adding 1 coin doesn't lose existing analysis.
+  const analyzeOneMutation = useMutation({
+    mutationFn: async (symbol: string) => {
+      const res = await fetch("/api/insights/analyze", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ market, symbols: [symbol] }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Phân tích thất bại");
+      return data as InsightRunResponse;
+    },
+    onSuccess: (data) => {
+      setRuns((prev) => {
+        const cur = prev[market];
+        if (!cur) return { ...prev, [market]: data };
+        // Merge: replace any existing entry for the same symbol.
+        const newSymbols = new Set(data.items.map((i) => i.symbol));
+        return {
+          ...prev,
+          [market]: {
+            items: [
+              ...data.items,
+              ...cur.items.filter((i) => !newSymbols.has(i.symbol)),
+            ],
+            errors: [
+              ...data.errors,
+              ...cur.errors.filter(
+                (e) => !data.items.some((i) => i.symbol === e.symbol),
+              ),
+            ],
+            generatedAt: data.generatedAt,
+          },
+        };
+      });
+      if (data.items[0]) {
+        toast.success(`Đã phân tích ${data.items[0].symbol}`);
+      } else if (data.errors[0]) {
+        toast.error(`${data.errors[0].symbol}: ${data.errors[0].message}`);
+      }
+    },
+    onError: (err) =>
+      toast.error(err instanceof Error ? err.message : "Lỗi phân tích"),
+  });
+
+  // ── Watchlist mutations ────────────────────────────────────────────
+  const addMutation = useMutation({
+    mutationFn: async (raw: string) => {
+      const symbol = normalizeSymbol(raw);
+      if (!symbol) throw new Error("Symbol không hợp lệ");
+      const res = await fetch("/api/watchlist", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ market, symbol }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Thêm symbol thất bại");
+      return data as WatchlistItem;
+    },
+    onSuccess: (item) => {
+      toast.success(`Đã thêm ${item.symbol}`);
+      qc.invalidateQueries({ queryKey: ["watchlist", market] });
+      // Auto-run AI for the newly added coin.
+      analyzeOneMutation.mutate(item.symbol);
+    },
+    onError: (err) =>
+      toast.error(err instanceof Error ? err.message : "Lỗi thêm symbol"),
+  });
+
+  const removeMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const res = await fetch(`/api/watchlist/${id}`, { method: "DELETE" });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error ?? "Xóa symbol thất bại");
+      return id;
+    },
+    onSuccess: () => {
+      toast.success("Đã xóa khỏi watchlist");
+      qc.invalidateQueries({ queryKey: ["watchlist", market] });
+    },
+    onError: (err) =>
+      toast.error(err instanceof Error ? err.message : "Lỗi xóa symbol"),
+  });
+
   const onMarketChange = (m: string | null) => {
     if (!m) return;
     setMarket(m as InsightMarket);
@@ -259,6 +335,19 @@ export function InsightsClient() {
     addMutation.mutate(s, {
       onSuccess: () => setCustomSymbol(""),
     });
+  };
+
+  /**
+   * Click handler for a Top Trend chip. If the coin is already in the
+   * watchlist, just kick off (or re-run) analysis. Otherwise add it
+   * first — the add mutation auto-analyzes after success.
+   */
+  const onPickFromTrend = (symbol: string) => {
+    if (watchlistByNorm.has(normalizeSymbol(symbol))) {
+      analyzeOneMutation.mutate(symbol);
+      return;
+    }
+    addMutation.mutate(symbol);
   };
 
   // ──────────────────────────────────────────────────────────────────
@@ -282,13 +371,13 @@ export function InsightsClient() {
             <Settings2 className="size-4" />
             Quản lý symbol
             <Badge variant="secondary" className="ml-1 h-5 font-mono text-[11px]">
-              {allSymbols.length}
+              {userSymbols.length}
             </Badge>
           </Button>
           <Button
             type="button"
-            onClick={() => analyzeMutation.mutate()}
-            disabled={analyzeMutation.isPending || allSymbols.length === 0}
+            onClick={() => analyzeMutation.mutate(userSymbols)}
+            disabled={analyzeMutation.isPending || userSymbols.length === 0}
           >
             <Sparkles
               className={cn(
@@ -296,17 +385,34 @@ export function InsightsClient() {
                 analyzeMutation.isPending && "animate-pulse",
               )}
             />
-            {analyzeMutation.isPending ? "Đang phân tích…" : "Phân tích"}
+            {analyzeMutation.isPending ? "Đang phân tích…" : "Phân tích lại tất cả"}
           </Button>
         </div>
       </div>
+
+      {/* Top Trend recommendations */}
+      <TopTrendCard
+        data={topTrendQ.data}
+        loading={topTrendQ.isLoading}
+        error={topTrendQ.error instanceof Error ? topTrendQ.error.message : null}
+        refetch={() => topTrendQ.refetch()}
+        refreshing={topTrendQ.isFetching && !topTrendQ.isLoading}
+        watchlistByNorm={watchlistByNorm}
+        analyzingSymbol={
+          analyzeOneMutation.isPending || addMutation.isPending
+            ? (analyzeOneMutation.variables ??
+                addMutation.variables ??
+                null)
+            : null
+        }
+        onPick={onPickFromTrend}
+      />
 
       {/* Symbol manager */}
       {showManager ? (
         <SymbolManager
           market={market}
-          allSymbols={allSymbols}
-          curatedFor={market}
+          userSymbols={userSymbols}
           watchlistByNorm={watchlistByNorm}
           loading={watchlistQ.isLoading}
           picker={picker}
@@ -321,13 +427,12 @@ export function InsightsClient() {
           onAddCustom={onAddCustom}
           onRemove={(id) => removeMutation.mutate(id)}
           adding={addMutation.isPending}
-          removing={removeMutation.isPending}
         />
       ) : null}
 
       {/* Results area */}
       {analyzeMutation.isPending ? (
-        <ResultsSkeleton count={Math.min(allSymbols.length, 10)} />
+        <ResultsSkeleton count={Math.min(userSymbols.length, 10)} />
       ) : currentRun ? (
         <ResultsList
           run={currentRun}
@@ -339,8 +444,8 @@ export function InsightsClient() {
       ) : (
         <EmptyState
           icon={Sparkles}
-          title="Chưa có kết quả"
-          description="Bấm Phân tích để chấm điểm bằng AI cho danh sách hiện tại."
+          title="Chưa có phân tích nào"
+          description="Pick coin từ Top Trend ở trên hoặc bấm Quản lý symbol để thêm — AI sẽ phân tích tự động."
         />
       )}
     </div>
@@ -348,13 +453,158 @@ export function InsightsClient() {
 }
 
 // ──────────────────────────────────────────────────────────────────────
-// Symbol manager (collapsible)
+// Top Trend card — recommendations from technical scan across top 100
+// ──────────────────────────────────────────────────────────────────────
+
+function TopTrendCard(props: {
+  data: TopTrendResponse | undefined;
+  loading: boolean;
+  error: string | null;
+  refetch: () => void;
+  refreshing: boolean;
+  watchlistByNorm: Map<string, WatchlistItem>;
+  analyzingSymbol: string | null;
+  onPick: (symbol: string) => void;
+}) {
+  const { data, loading, error, refetch, refreshing, watchlistByNorm, analyzingSymbol, onPick } = props;
+
+  return (
+    <Card>
+      <CardHeader className="flex flex-row items-start justify-between gap-3 space-y-0">
+        <div className="space-y-1">
+          <CardTitle className="flex items-center gap-2 text-base">
+            <TrendingUp className="size-4 text-primary" />
+            Top Trend
+          </CardTitle>
+          <CardDescription>
+            Coin đang trend mạnh nhất theo EMA-WMA-RSI đa khung
+            {data?.timeframes ? ` (${data.timeframes.join(", ")})` : ""}.
+            Click để AI phân tích.
+          </CardDescription>
+        </div>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={refetch}
+          disabled={loading || refreshing}
+        >
+          <RefreshCw
+            className={cn("size-4", refreshing && "animate-spin")}
+          />
+        </Button>
+      </CardHeader>
+      <CardContent>
+        {loading ? (
+          <div className="space-y-3">
+            <Skeleton className="h-4 w-32" />
+            <div className="flex flex-wrap gap-1.5">
+              {Array.from({ length: 10 }).map((_, i) => (
+                <Skeleton key={i} className="h-7 w-20 rounded-md" />
+              ))}
+            </div>
+            <p className="text-[11px] text-muted-foreground">
+              Đang quét top 100 USDT × 4 khung — mất 30-60 giây.
+            </p>
+          </div>
+        ) : error ? (
+          <div className="text-sm text-destructive">{error}</div>
+        ) : data ? (
+          <div className="grid gap-4 md:grid-cols-2">
+            <TrendChipList
+              title="Bullish mạnh nhất"
+              icon={<TrendingUp className="size-3.5 text-bullish" />}
+              items={data.bullish}
+              watchlistByNorm={watchlistByNorm}
+              analyzingSymbol={analyzingSymbol}
+              onPick={onPick}
+            />
+            <TrendChipList
+              title="Bearish mạnh nhất"
+              icon={<TrendingDown className="size-3.5 text-bearish" />}
+              items={data.bearish}
+              watchlistByNorm={watchlistByNorm}
+              analyzingSymbol={analyzingSymbol}
+              onPick={onPick}
+            />
+          </div>
+        ) : null}
+      </CardContent>
+    </Card>
+  );
+}
+
+function TrendChipList(props: {
+  title: string;
+  icon: React.ReactNode;
+  items: TopTrendEntry[];
+  watchlistByNorm: Map<string, WatchlistItem>;
+  analyzingSymbol: string | null;
+  onPick: (symbol: string) => void;
+}) {
+  const { title, icon, items, watchlistByNorm, analyzingSymbol, onPick } = props;
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+        {icon}
+        {title}
+      </div>
+      {items.length === 0 ? (
+        <div className="rounded-md border border-dashed p-3 text-center text-xs text-muted-foreground">
+          Không có coin nào
+        </div>
+      ) : (
+        <ul className="space-y-1.5">
+          {items.map((e) => {
+            const isInWatchlist = watchlistByNorm.has(normalizeSymbol(e.symbol));
+            const isLoading = analyzingSymbol === e.symbol;
+            return (
+              <li key={e.symbol}>
+                <button
+                  type="button"
+                  className={cn(
+                    "flex w-full items-center justify-between gap-2 rounded-md border bg-card/40 px-3 py-1.5 text-sm transition hover:bg-card/80",
+                    isLoading && "opacity-60",
+                  )}
+                  onClick={() => onPick(e.symbol)}
+                  disabled={isLoading}
+                >
+                  <span className="flex items-center gap-2">
+                    <span className="font-mono text-sm">{e.symbol}</span>
+                    {isInWatchlist ? (
+                      <Badge
+                        variant="ghost"
+                        className="h-4 px-1 text-[9px] uppercase"
+                      >
+                        đã thêm
+                      </Badge>
+                    ) : null}
+                  </span>
+                  <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                    <span className="num tabular-nums">
+                      {e.score.toFixed(0)}
+                    </span>
+                    <span className="text-[10px]">
+                      ({e.bullishCount}/{e.bullishCount + e.bearishCount + e.neutralCount})
+                    </span>
+                  </span>
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// Symbol manager (collapsible) — no more curated lock
 // ──────────────────────────────────────────────────────────────────────
 
 function SymbolManager(props: {
   market: InsightMarket;
-  allSymbols: string[];
-  curatedFor: InsightMarket;
+  userSymbols: string[];
   watchlistByNorm: Map<string, WatchlistItem>;
   loading: boolean;
   picker: string;
@@ -365,11 +615,10 @@ function SymbolManager(props: {
   onAddCustom: () => void;
   onRemove: (id: string) => void;
   adding: boolean;
-  removing: boolean;
 }) {
   const {
     market,
-    allSymbols,
+    userSymbols,
     watchlistByNorm,
     loading,
     picker,
@@ -382,16 +631,13 @@ function SymbolManager(props: {
     adding,
   } = props;
 
-  const curatedCount =
-    market === "FOREX" ? CURATED_FOREX.length : CURATED_CRYPTO.length;
-
   return (
     <Card>
       <CardHeader>
         <CardTitle className="text-base">Quản lý danh sách symbol</CardTitle>
         <CardDescription>
-          Top {curatedCount} mặc định luôn hiển thị (có biểu tượng khóa). Bạn
-          có thể thêm symbol vào watchlist; chỉ symbol bạn thêm mới có thể xóa.
+          Pick coin từ danh sách hoặc gõ symbol tùy chọn. Mỗi coin thêm vào
+          sẽ được AI phân tích tự động.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -444,37 +690,39 @@ function SymbolManager(props: {
 
         <div>
           <div className="mb-2 text-xs font-medium text-muted-foreground">
-            Danh sách hiện tại ({allSymbols.length})
+            Danh sách của bạn ({userSymbols.length})
             {loading ? " — đang tải…" : ""}
           </div>
-          <div className="flex flex-wrap gap-1.5">
-            {allSymbols.map((s) => {
-              const curated = isCuratedSymbol(market, s);
-              const wl = watchlistByNorm.get(s);
-              return (
-                <Badge
-                  key={s}
-                  variant={curated ? "secondary" : "outline"}
-                  className="h-7 gap-1.5 px-2 font-mono text-[11px]"
-                >
-                  {curated ? (
-                    <Lock className="size-3 text-muted-foreground" />
-                  ) : null}
-                  {s}
-                  {!curated && wl ? (
-                    <button
-                      type="button"
-                      className="-mr-0.5 rounded-sm opacity-70 hover:opacity-100"
-                      onClick={() => onRemove(wl.id)}
-                      aria-label={`Bỏ ${s}`}
-                    >
-                      <X className="size-3" />
-                    </button>
-                  ) : null}
-                </Badge>
-              );
-            })}
-          </div>
+          {userSymbols.length === 0 ? (
+            <p className="text-xs text-muted-foreground">
+              Chưa có symbol nào. Pick từ Top Trend ở trên hoặc thêm tay.
+            </p>
+          ) : (
+            <div className="flex flex-wrap gap-1.5">
+              {userSymbols.map((s) => {
+                const wl = watchlistByNorm.get(normalizeSymbol(s));
+                return (
+                  <Badge
+                    key={s}
+                    variant="outline"
+                    className="h-7 gap-1.5 px-2 font-mono text-[11px]"
+                  >
+                    {s}
+                    {wl ? (
+                      <button
+                        type="button"
+                        className="-mr-0.5 rounded-sm opacity-70 hover:opacity-100"
+                        onClick={() => onRemove(wl.id)}
+                        aria-label={`Bỏ ${s}`}
+                      >
+                        <X className="size-3" />
+                      </button>
+                    ) : null}
+                  </Badge>
+                );
+              })}
+            </div>
+          )}
         </div>
       </CardContent>
     </Card>

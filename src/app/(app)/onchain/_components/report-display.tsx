@@ -2,7 +2,10 @@
 
 import * as React from "react";
 import {
+  ArrowDown,
   ArrowRightLeft,
+  ArrowUp,
+  Coins,
   Droplets,
   Flag,
   Footprints,
@@ -21,6 +24,14 @@ import {
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import { cn } from "@/lib/utils";
 
 import { RiskBadge } from "./risk-badge";
@@ -178,8 +189,186 @@ export function ReportDisplay({
         </CardContent>
       </Card>
 
+      <HoldingsCard raw={report.rawData} />
+
       <RawDataAccordion raw={report.rawData} />
     </div>
+  );
+}
+
+// ─────────────────────────────────────────── Holdings + buy/sell table
+
+type HoldingLike = {
+  contract: string;
+  symbol: string | null;
+  name: string | null;
+  decimals: number | null;
+  balance: string | null;
+  incoming: { count: number; total: string };
+  outgoing: { count: number; total: string };
+};
+
+function parseHoldings(raw: unknown): HoldingLike[] {
+  if (!raw || typeof raw !== "object") return [];
+  const r = raw as Record<string, unknown>;
+  const arr = r.holdings;
+  if (!Array.isArray(arr)) return [];
+  return arr
+    .map((h) => {
+      if (!h || typeof h !== "object") return null;
+      const o = h as Record<string, unknown>;
+      const inc = o.incoming as Record<string, unknown> | undefined;
+      const out = o.outgoing as Record<string, unknown> | undefined;
+      return {
+        contract: typeof o.contract === "string" ? o.contract : "",
+        symbol: typeof o.symbol === "string" ? o.symbol : null,
+        name: typeof o.name === "string" ? o.name : null,
+        decimals:
+          typeof o.decimals === "number"
+            ? o.decimals
+            : typeof o.decimals === "string"
+              ? Number(o.decimals)
+              : null,
+        balance: typeof o.balance === "string" ? o.balance : null,
+        incoming: {
+          count: typeof inc?.count === "number" ? inc.count : 0,
+          total: typeof inc?.total === "string" ? inc.total : "0",
+        },
+        outgoing: {
+          count: typeof out?.count === "number" ? out.count : 0,
+          total: typeof out?.total === "string" ? out.total : "0",
+        },
+      } satisfies HoldingLike;
+    })
+    .filter((x): x is HoldingLike => x !== null && x.contract !== "");
+}
+
+/**
+ * Render a raw token-unit integer ("123456789...") as a human-readable
+ * number using BigInt division — we never go through Number for the
+ * integer part to avoid losing precision for 18-decimal tokens.
+ */
+function formatUnits(raw: string, decimals: number | null): string {
+  if (decimals === null || decimals < 0) return raw;
+  try {
+    const n = BigInt(raw);
+    if (decimals === 0) return n.toString();
+    // Avoid BigInt-literal syntax (`10n`) for ES2017 target compatibility.
+    const denom = BigInt(10) ** BigInt(decimals);
+    const whole = n / denom;
+    const frac = n % denom;
+    if (frac === BigInt(0)) return whole.toString();
+    // Show up to 4 significant fractional digits, trimming trailing zeros.
+    const fracStr = frac.toString().padStart(decimals, "0").slice(0, 4);
+    const trimmed = fracStr.replace(/0+$/, "");
+    return trimmed ? `${whole.toString()}.${trimmed}` : whole.toString();
+  } catch {
+    return raw;
+  }
+}
+
+function HoldingsCard({ raw }: { raw: unknown }) {
+  const holdings = React.useMemo(() => parseHoldings(raw), [raw]);
+  if (holdings.length === 0) return null;
+
+  // Show those with positive balance first, then by activity.
+  const sorted = [...holdings].sort((a, b) => {
+    const aHas = a.balance && a.balance !== "0";
+    const bHas = b.balance && b.balance !== "0";
+    if (aHas && !bHas) return -1;
+    if (!aHas && bHas) return 1;
+    return (
+      b.incoming.count + b.outgoing.count - (a.incoming.count + a.outgoing.count)
+    );
+  });
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-sm">
+          <Coins className="size-4 text-primary" />
+          Token đang nắm giữ & hành vi mua/bán
+        </CardTitle>
+        <CardDescription>
+          Balance hiện tại + thống kê chuyển vào/ra của ví trên cửa sổ gần đây
+          (Etherscan V2, tối đa 50 transfer).
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="overflow-x-auto">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Token</TableHead>
+              <TableHead className="text-right">Balance</TableHead>
+              <TableHead className="text-center">
+                <span className="inline-flex items-center gap-1">
+                  <ArrowDown className="size-3 text-bullish" />
+                  Vào
+                </span>
+              </TableHead>
+              <TableHead className="text-center">
+                <span className="inline-flex items-center gap-1">
+                  <ArrowUp className="size-3 text-bearish" />
+                  Ra
+                </span>
+              </TableHead>
+              <TableHead className="text-center">Xu hướng</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {sorted.slice(0, 20).map((h) => {
+              const bal =
+                h.balance !== null ? formatUnits(h.balance, h.decimals) : "—";
+              const verdict =
+                h.incoming.count > h.outgoing.count * 2
+                  ? { text: "Gom", className: "bg-bullish/10 text-bullish" }
+                  : h.outgoing.count > h.incoming.count * 2
+                    ? { text: "Xả", className: "bg-bearish/10 text-bearish" }
+                    : { text: "Luân chuyển", className: "bg-muted text-foreground" };
+              return (
+                <TableRow key={h.contract}>
+                  <TableCell>
+                    <div className="space-y-0.5">
+                      <div className="font-mono text-sm font-medium">
+                        {h.symbol ?? "?"}
+                      </div>
+                      {h.name && h.name !== h.symbol ? (
+                        <div className="text-xs text-muted-foreground">
+                          {h.name}
+                        </div>
+                      ) : null}
+                    </div>
+                  </TableCell>
+                  <TableCell className="num tabular-nums text-right text-sm">
+                    {bal}
+                  </TableCell>
+                  <TableCell className="num text-center text-sm tabular-nums">
+                    {h.incoming.count}
+                  </TableCell>
+                  <TableCell className="num text-center text-sm tabular-nums">
+                    {h.outgoing.count}
+                  </TableCell>
+                  <TableCell className="text-center">
+                    <Badge
+                      variant="outline"
+                      className={cn("border-transparent", verdict.className)}
+                    >
+                      {verdict.text}
+                    </Badge>
+                  </TableCell>
+                </TableRow>
+              );
+            })}
+          </TableBody>
+        </Table>
+        <p className="mt-3 text-xs text-muted-foreground">
+          <span className="font-medium">Gom</span> = inbound nhiều hơn outbound
+          ≥ 2x ·{" "}
+          <span className="font-medium">Xả</span> = outbound nhiều hơn ≥ 2x.
+          Số liệu tính trong cửa sổ 50 transfer gần đây nhất, không phải toàn lịch sử.
+        </p>
+      </CardContent>
+    </Card>
   );
 }
 

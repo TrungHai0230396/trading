@@ -40,6 +40,7 @@ function truncateForStorage(snapshot: RunOnchainSnapshot): unknown {
       balanceWei: snapshot.balanceWei,
       recentTxs: snapshot.recentTxs.slice(0, 25),
       recentTokenTransfers: snapshot.recentTokenTransfers.slice(0, TRANSFER_LIMIT),
+      holdings: snapshot.holdings,
     };
   }
   if (snapshot.kind === "TOKEN") {

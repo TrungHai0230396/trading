@@ -51,10 +51,10 @@ export const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
         description: "RSI/MACD/EMA trên nhiều timeframe",
       },
       {
-        label: "Phân tích top",
+        label: "Phân tích AI",
         href: "/insights",
         icon: Sparkles,
-        description: "AI chấm điểm % tăng/giảm cho top 10",
+        description: "AI chấm coin bạn chọn + gợi ý Top Trend đa khung",
       },
       {
         label: "Tin tức & AI",

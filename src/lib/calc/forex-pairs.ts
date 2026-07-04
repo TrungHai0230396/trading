@@ -1,8 +1,18 @@
 /**
- * Forex pair metadata. Standard Forex conventions:
- *   - JPY pairs: pip size = 0.01 (the 2nd decimal)
- *   - Most others: pip size = 0.0001 (the 4th decimal)
- *   - 1 standard lot = 100,000 base-currency units
+ * Forex (and forex-traded instruments) metadata.
+ *
+ * Conventions:
+ *   - Currency pairs:
+ *     · 1 standard lot = 100,000 base-currency units
+ *     · JPY pairs: pip size = 0.01 (the 2nd decimal)
+ *     · Most others: pip size = 0.0001 (the 4th decimal)
+ *   - Metals (most MT4/MT5 brokers — Exness, Pepperstone, FXCM…):
+ *     · XAUUSD: 1 lot = 100 oz, pip = 0.01, pip value = $1/lot
+ *     · XAGUSD: 1 lot = 5,000 oz, pip = 0.001, pip value = $5/lot
+ *
+ * Different brokers can quote metals slightly differently (some call
+ * 0.10 a "pip", some 0.01). We use the smallest tick = 1 pip rule
+ * since that's what MT4's stops dialog displays.
  */
 
 export type ForexPair = {
@@ -12,7 +22,10 @@ export type ForexPair = {
   quote: string;         // USD
   pipSize: number;
   digits: number;        // typical price decimals (5 for non-JPY, 3 for JPY)
-  group: "Major" | "Minor" | "Exotic";
+  /** Base-currency units per 1 standard lot. 100,000 for FX, 100 for
+   *  gold (XAU), 5,000 for silver (XAG). */
+  lotUnits: number;
+  group: "Major" | "Minor" | "Exotic" | "Metal";
 };
 
 export const ACCOUNT_CURRENCIES = [
@@ -41,7 +54,26 @@ function make(
     quote,
     pipSize: isJpy(symbol) ? 0.01 : 0.0001,
     digits: isJpy(symbol) ? 3 : 5,
+    lotUnits: 100_000,
     group,
+  };
+}
+
+/** Metal pair builder — different lot size + tick conventions than FX. */
+function metal(
+  base: "XAU" | "XAG",
+  quote: string,
+  opts: { pipSize: number; digits: number; lotUnits: number },
+): ForexPair {
+  return {
+    symbol: `${base}${quote}`,
+    display: `${base}/${quote}`,
+    base,
+    quote,
+    pipSize: opts.pipSize,
+    digits: opts.digits,
+    lotUnits: opts.lotUnits,
+    group: "Metal",
   };
 }
 
@@ -81,6 +113,10 @@ export const FOREX_PAIRS: ForexPair[] = [
   make("NZD", "JPY", "Minor"),
   make("NZD", "CAD", "Minor"),
   make("NZD", "CHF", "Minor"),
+
+  // Metals — quoted in USD on most MT4/MT5 brokers
+  metal("XAU", "USD", { pipSize: 0.01, digits: 2, lotUnits: 100 }),
+  metal("XAG", "USD", { pipSize: 0.001, digits: 3, lotUnits: 5_000 }),
 ];
 
 export const FOREX_PAIR_BY_SYMBOL: Record<string, ForexPair> = Object.fromEntries(

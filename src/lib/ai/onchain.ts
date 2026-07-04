@@ -62,6 +62,23 @@ function buildPrompt(input: {
       }`
     : "DefiLlama price: không có hoặc không tra được.";
 
+  const walletGuidance =
+    targetType === "WALLET"
+      ? [
+          "",
+          "Vì target là WALLET, hãy đặc biệt chú ý phần `holdings` trong raw data:",
+          "- Liệt kê **3-5 token chính** ví đang nắm giữ (chọn theo balance > 0 và số",
+          "  giao dịch nhiều nhất). Mỗi token nêu: symbol, balance ước tính",
+          "  (đã chia decimals), số lần mua vs số lần bán trong window gần đây.",
+          "- Phân tích **hành vi mua/bán**: incoming.count = số lần nhận token vào ví",
+          "  (mua hoặc nhận chuyển), outgoing.count = số lần chuyển ra (bán hoặc gửi).",
+          "  Tỉ lệ in/out cho biết ví đang gom (in>>out), xả (out>>in), hay luân chuyển.",
+          "- Nếu balance hiện tại > 0 nhưng outgoing.count cao → có thể đang xả dần.",
+          "- Nếu balance = 0 và outgoing >> 0 → đã bán hết / chuyển hết.",
+          "- Đưa nhận định chỉ dựa trên cửa sổ gần đây (không suy diễn quá xa).",
+        ].join("\n")
+      : "";
+
   return [
     "Bạn là chuyên gia phân tích on-chain. Hãy đọc dữ liệu thô từ explorer và",
     "viết báo cáo NGẮN GỌN bằng tiếng Việt, giữ nguyên các thuật ngữ on-chain",
@@ -71,6 +88,7 @@ function buildPrompt(input: {
     `Target type: ${targetType}`,
     `Target: ${target}`,
     priceLine,
+    walletGuidance,
     "",
     "RAW DATA (đã cắt bớt nếu quá dài):",
     "```json",
@@ -81,15 +99,16 @@ function buildPrompt(input: {
     "- CHỈ trả về JSON hợp lệ, KHÔNG kèm markdown / không kèm ```json fence.",
     "- Schema:",
     "  {",
-    '    "summary": "tối đa 4 câu tiếng Việt, súc tích, nêu nhận định chính",',
+    '    "summary": "5-6 câu tiếng Việt. Với WALLET, nói rõ: ví đang nắm giữ token chính nào, đang gom hay xả, mức rủi ro.",',
     '    "riskLevel": "low" | "medium" | "high",',
     '    "insights": [',
     '      { "type": "flow"|"holders"|"liquidity"|"behavior"|"flag",',
     '        "label": "tiêu đề ngắn", "detail": "1-2 câu giải thích" }',
     "    ]",
     "  }",
-    "- Đưa 3-6 insight tập trung vào dòng tiền, hành vi giao dịch, dấu hiệu rủi ro,",
-    "  thanh khoản hoặc cảnh báo (rug, mev, mixer, sandwich, contract mới...).",
+    "- Đưa 4-7 insight. Với WALLET, ít nhất 1 insight `holders` (token đang nắm)",
+    "  và 1 insight `behavior` (hành vi mua/bán). Phần còn lại dành cho dòng tiền,",
+    "  dấu hiệu rủi ro hoặc cảnh báo (rug, mev, mixer, sandwich...).",
     "- Nếu không đủ dữ liệu, vẫn trả JSON đúng schema và nói rõ trong summary.",
   ].join("\n");
 }

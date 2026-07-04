@@ -8,7 +8,7 @@
  *   currency is worth right now. If account == quote, pass 1.
  */
 
-import { LOT_UNITS, type ForexPair } from "@/lib/calc/forex-pairs";
+import { type ForexPair } from "@/lib/calc/forex-pairs";
 
 export type StopMode = "price" | "pips";
 export type RiskMode = "percent" | "fixed";
@@ -46,6 +46,34 @@ export type CryptoInput = {
   quoteToAccountRate: number;
 };
 
+/**
+ * Futures-leverage suggestion derived from risk + stop, NOT taken as input.
+ *
+ * The fundamental idea: in isolated-margin futures the user picks a margin
+ * to lock up; loss when SL hits is bounded by that margin. If user wants
+ * margin = risk amount and SL = full margin drawdown, the required
+ * leverage to control `units` size is:
+ *
+ *   leverage = notional / margin = (units × entry) / riskAmount
+ *           = (riskAmount / stopDistance × entry) / riskAmount
+ *           = entry / stopDistance
+ *
+ * The "safe" variant doubles the margin (risk = 50% of margin) so SL
+ * hits at half the liquidation distance — leverage halves.
+ */
+export type LeverageSuggestion = {
+  /** entry / stopDistance — SL ≈ liquidation, lose 100% margin if SL hit. */
+  exact: number;
+  /** Whole-number ceiling of `exact` — what you'd actually type on an exchange. */
+  rounded: number;
+  /** exact / 2 — recommended: SL = ~50% of margin loss, leaves a buffer. */
+  safe: number;
+  /** Margin (account currency) that, with `exact`, makes loss-on-SL = risk. */
+  marginForExact: number;
+  /** Margin needed if user uses the `safe` (half) leverage instead. */
+  marginForSafe: number;
+};
+
 export type PositionSizeResult = {
   market: "FOREX" | "CRYPTO";
   riskAmount: number;             // in account currency
@@ -60,6 +88,8 @@ export type PositionSizeResult = {
   };
   notional: number;               // entry * units, in quote (or quote*rate for FX→account)
   notionalInAccount: number;
+  /** Computed leverage advice for isolated-margin futures. */
+  leverage?: LeverageSuggestion;
   rrRatio?: number;               // |TP-entry| / |SL-entry|
   takeProfitPips?: number;
   expectedProfit?: number;        // when TP hits, in account
@@ -105,6 +135,39 @@ function rrFromPrices(
   };
 }
 
+/**
+ * Compute the leverage suggestion from notional + risk + entry/stop.
+ * See LeverageSuggestion type for the math derivation.
+ *
+ *   exact      = entry / stopDistance        (margin = riskAmount, SL ≈ liq)
+ *   rounded    = ceil(exact)                 (what you'd actually set)
+ *   safe       = exact / 2                   (50% buffer)
+ *   marginForExact = riskAmount
+ *   marginForSafe  = riskAmount × 2
+ *
+ * Returns `undefined` when inputs make the math undefined (zero distance,
+ * non-positive entry, etc.) — caller falls back to omitting the field.
+ */
+function computeLeverageSuggestion(
+  entry: number,
+  stopDistance: number,
+  riskAmount: number,
+): LeverageSuggestion | undefined {
+  if (entry <= 0 || stopDistance <= 0 || !Number.isFinite(entry) ||
+      !Number.isFinite(stopDistance)) {
+    return undefined;
+  }
+  const exact = entry / stopDistance;
+  if (!Number.isFinite(exact) || exact <= 0) return undefined;
+  return {
+    exact,
+    rounded: Math.max(1, Math.ceil(exact)),
+    safe: exact / 2,
+    marginForExact: riskAmount,
+    marginForSafe: riskAmount * 2,
+  };
+}
+
 // ──────────────────────────────────────────────────────────────────────────
 // Forex
 // ──────────────────────────────────────────────────────────────────────────
@@ -139,7 +202,10 @@ export function calcForexPosition(input: ForexInput): PositionSizeResult {
   );
 
   // Pip value per standard lot in QUOTE currency = pipSize * contractSize.
-  const pipValuePerStdLotQuote = pair.pipSize * LOT_UNITS.standard;
+  // pip value per std lot in quote ccy = pip size × lot size (in base
+  // units). For FX: 0.0001 × 100,000 = $10/lot. For gold: 0.01 × 100 =
+  // $1/lot. For silver: 0.001 × 5,000 = $5/lot.
+  const pipValuePerStdLotQuote = pair.pipSize * pair.lotUnits;
   const pipValuePerStdLotAccount =
     pipValuePerStdLotQuote * input.quoteToAccountRate;
 
@@ -158,9 +224,22 @@ export function calcForexPosition(input: ForexInput): PositionSizeResult {
     warnings.push("Khoảng cách stop loss bằng 0.");
   }
 
-  const units = standardLots * LOT_UNITS.standard;
+  const units = standardLots * pair.lotUnits;
   const notionalInQuote = units * entryPrice;
   const notionalInAccount = notionalInQuote * input.quoteToAccountRate;
+
+  // Leverage suggestion derived from price-action inputs (entry/SL +
+  // chosen risk). NOT a user input — just a hint for futures sizing.
+  const lev = computeLeverageSuggestion(entryPrice, distance, riskAmount);
+  const leverage = lev
+    ? {
+        exact: round(lev.exact, 2),
+        rounded: lev.rounded,
+        safe: round(lev.safe, 2),
+        marginForExact: round(lev.marginForExact, 2),
+        marginForSafe: round(lev.marginForSafe, 2),
+      }
+    : undefined;
 
   let takeProfitPips: number | undefined;
   let expectedProfit: number | undefined;
@@ -183,6 +262,7 @@ export function calcForexPosition(input: ForexInput): PositionSizeResult {
     },
     notional: round(notionalInQuote, 2),
     notionalInAccount: round(notionalInAccount, 2),
+    leverage,
     rrRatio: rr ? round(rr, 2) : undefined,
     takeProfitPips: takeProfitPips ? round(takeProfitPips, 1) : undefined,
     expectedProfit:
@@ -231,6 +311,17 @@ export function calcCryptoPosition(input: CryptoInput): PositionSizeResult {
   const notionalInQuote = units * entryPrice;
   const notionalInAccount = notionalInQuote * input.quoteToAccountRate;
 
+  const lev = computeLeverageSuggestion(entryPrice, distance, riskAmount);
+  const leverage = lev
+    ? {
+        exact: round(lev.exact, 2),
+        rounded: lev.rounded,
+        safe: round(lev.safe, 2),
+        marginForExact: round(lev.marginForExact, 2),
+        marginForSafe: round(lev.marginForSafe, 2),
+      }
+    : undefined;
+
   let expectedProfit: number | undefined;
   if (tpDistance != null) {
     expectedProfit = tpDistance * units * input.quoteToAccountRate;
@@ -245,6 +336,7 @@ export function calcCryptoPosition(input: CryptoInput): PositionSizeResult {
     },
     notional: round(notionalInQuote, 2),
     notionalInAccount: round(notionalInAccount, 2),
+    leverage,
     rrRatio: rr ? round(rr, 2) : undefined,
     expectedProfit:
       expectedProfit != null ? round(expectedProfit, 2) : undefined,

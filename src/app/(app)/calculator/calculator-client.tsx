@@ -1,9 +1,11 @@
 "use client";
 
 import * as React from "react";
+import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { useMutation } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Calculator, RefreshCw } from "lucide-react";
+import { Calculator, NotebookPen, RefreshCw } from "lucide-react";
 
 import {
   Card,
@@ -46,6 +48,13 @@ type PositionResult = {
   };
   notional: number;
   notionalInAccount: number;
+  leverage?: {
+    exact: number;
+    rounded: number;
+    safe: number;
+    marginForExact: number;
+    marginForSafe: number;
+  };
   warnings: string[];
   meta: {
     symbol: string;
@@ -83,11 +92,53 @@ const INITIAL_STATE: FormState = {
 // Allow comma decimals (European style) in number inputs.
 const num = (s: string): number => Number(String(s).replace(",", "."));
 
+/**
+ * Build an initial state by overlaying URL-search-param values onto the
+ * built-in defaults. Used when navigating in from the scanner analysis
+ * page's "Tính lot" button.
+ *
+ * Only the params we explicitly handle make it through — anything else
+ * is ignored to keep behavior predictable.
+ */
+function stateFromSearchParams(
+  params: URLSearchParams | null,
+): FormState {
+  if (!params) return INITIAL_STATE;
+  const next: FormState = { ...INITIAL_STATE };
+  const market = params.get("market");
+  if (market === "CRYPTO" || market === "FOREX") next.market = market;
+  const symbol = params.get("symbol");
+  if (symbol) next.symbol = symbol.toUpperCase();
+  const riskAmount = params.get("riskAmount");
+  if (riskAmount) next.riskAmount = riskAmount;
+  const stopMode = params.get("stopMode");
+  if (stopMode === "pips" || stopMode === "price") next.stopMode = stopMode;
+  const stopPips = params.get("stopPips");
+  if (stopPips) next.stopPips = stopPips;
+  const entryPrice = params.get("entryPrice");
+  if (entryPrice) next.entryPrice = entryPrice;
+  const stopPrice = params.get("stopPrice");
+  if (stopPrice) {
+    next.stopPrice = stopPrice;
+    // When SL price arrives we want price-mode by default (caller may
+    // override with stopMode=pips above).
+    if (!stopMode) next.stopMode = "price";
+  }
+  const accountCurrency = params.get("accountCurrency");
+  if (accountCurrency) next.accountCurrency = accountCurrency.toUpperCase();
+  return next;
+}
+
 // ──────────────────────────────────────────────────────────────────────
 // Component
 // ──────────────────────────────────────────────────────────────────────
 export function CalculatorClient() {
-  const [state, setState] = React.useState<FormState>(INITIAL_STATE);
+  // `useSearchParams` requires a Suspense boundary in Next 16.
+  // The parent page (calculator/page.tsx) wraps us in <Suspense>.
+  const searchParams = useSearchParams();
+  const [state, setState] = React.useState<FormState>(() =>
+    stateFromSearchParams(searchParams),
+  );
   const [result, setResult] = React.useState<PositionResult | null>(null);
   const update = <K extends keyof FormState>(key: K, value: FormState[K]) =>
     setState((s) => ({ ...s, [key]: value }));
@@ -464,21 +515,15 @@ function ResultPanel({
         {result.market === "FOREX" ? (
           <>
             <Row
-              label="Units"
-              value={fmt(result.positionSize.units ?? 0, 0)}
-            />
-            <Row
               label="Standard Lots"
               value={fmt(result.positionSize.standardLots ?? 0, 4)}
               emphasis
             />
-            <Row
-              label="Mini Lots"
-              value={fmt(result.positionSize.miniLots ?? 0, 3)}
-            />
-            <Row
-              label="Micro Lots"
-              value={fmt(result.positionSize.microLots ?? 0, 2)}
+            <ForexRoundingOptions
+              exactLots={result.positionSize.standardLots ?? 0}
+              stopLossPips={result.stopLossPips ?? 0}
+              pipValuePerLot={result.pipValuePerLotInAccount ?? 0}
+              accountCcy={ccy}
             />
             <Separator />
             <Row
@@ -504,16 +549,74 @@ function ResultPanel({
               label={`Notional (${result.meta.quoteCurrency})`}
               value={fmt(result.notional)}
             />
-            <Row
-              label={`Notional (${ccy})`}
-              value={fmt(result.notionalInAccount)}
-            />
+            {/* Drop Notional in account currency when it would just
+                duplicate the quote-currency row (always the case when
+                quote ≈ account, e.g. USDT-quoted crypto for a USD
+                account). User asked for less duplication. */}
+            {Math.abs(result.notional - result.notionalInAccount) > 0.01 ? (
+              <Row
+                label={`Notional (${ccy})`}
+                value={fmt(result.notionalInAccount)}
+              />
+            ) : null}
             <Row
               label="Khoảng cách Stop Loss"
               value={fmt(result.stopLossDistance, 8)}
             />
           </>
         )}
+
+        {/* Leverage card only relevant for crypto futures. In forex,
+            "leverage" is set once at account level by the broker and
+            the lot system already encodes the leveraged notional, so
+            showing this card just adds confusion. */}
+        {result.leverage && result.market === "CRYPTO" ? (
+          <>
+            <Separator />
+            <div className="space-y-2 rounded-md border border-primary/30 bg-primary/5 p-3">
+              <div className="flex items-baseline justify-between">
+                <span className="text-xs font-medium text-muted-foreground">
+                  Đòn bẩy futures gợi ý
+                </span>
+                <span className="num text-2xl font-semibold leading-none text-primary">
+                  {result.leverage.rounded}x
+                </span>
+              </div>
+              <p className="text-[11px] leading-relaxed text-muted-foreground">
+                Đặt leverage <strong>{result.leverage.rounded}x</strong> với
+                margin ≈ <strong>{ccy} {fmt(result.leverage.marginForExact)}</strong>
+                {" "}thì SL ≈ giá thanh lý → nếu chạm SL mất 100% margin
+                (= đúng số risk).
+              </p>
+              <Separator />
+              <div className="flex items-baseline justify-between">
+                <span className="text-xs text-muted-foreground">
+                  An toàn (buffer 50%)
+                </span>
+                <span className="num text-sm font-medium">
+                  {fmt(result.leverage.safe, 1)}x · margin ≈ {ccy}{" "}
+                  {fmt(result.leverage.marginForSafe)}
+                </span>
+              </div>
+              <p className="text-[11px] leading-relaxed text-muted-foreground">
+                Halve leverage + double margin → SL chạm ở ~50% margin, còn dư
+                room trước thanh lý.
+              </p>
+            </div>
+          </>
+        ) : null}
+
+        {result.market === "CRYPTO" ? (
+          <>
+            <Separator />
+            <BinanceOrderHint
+              base={result.meta.display.split(" / ")[0]}
+              quoteCcy={result.meta.quoteCurrency}
+              units={result.positionSize.units}
+              notional={result.notional}
+            />
+          </>
+        ) : null}
 
         {result.meta.quoteToAccountRate !== 1 ? (
           <>
@@ -532,8 +635,104 @@ function ResultPanel({
             ))}
           </div>
         ) : null}
+
+        <Separator />
+        <CreateTradeButton state={state} result={result} />
       </CardContent>
     </Card>
+  );
+}
+
+/**
+ * Deep-link the calculator's result into the journal new-trade form via
+ * URL params. The journal form's applyPrefillFromParams() already knows
+ * how to read these — see [journal/trade-form-client.tsx].
+ *
+ * For crypto the lotSize is base-coin units (DOGE, BTC...). For forex it
+ * is Standard Lots. Direction is derived from entry vs SL: SL below entry
+ * → LONG, SL above entry → SHORT.
+ */
+function CreateTradeButton({
+  state,
+  result,
+}: {
+  state: FormState;
+  result: PositionResult;
+}) {
+  const entry = num(state.entryPrice);
+  const stop = num(state.stopPrice);
+  const hasPriceMode = Number.isFinite(entry) && Number.isFinite(stop) && entry > 0 && stop > 0;
+  const direction: "LONG" | "SHORT" | null = hasPriceMode
+    ? stop < entry
+      ? "LONG"
+      : "SHORT"
+    : null;
+
+  const lotSize =
+    result.market === "FOREX"
+      ? result.positionSize.standardLots ?? 0
+      : result.positionSize.units;
+
+  // Strip the "BASE / QUOTE" display name down to the broker symbol — for
+  // crypto the API returns the raw symbol in meta.symbol; for forex it's
+  // the 6-char pair like EURUSD.
+  const symbolParam = (result.meta.symbol || state.symbol).toUpperCase();
+
+  const params = new URLSearchParams();
+  params.set("symbol", symbolParam);
+  params.set("market", result.market);
+  if (direction) params.set("direction", direction);
+  if (Number.isFinite(entry) && entry > 0)
+    params.set("entryPrice", String(entry));
+  if (Number.isFinite(stop) && stop > 0)
+    params.set("stopLoss", String(stop));
+  if (lotSize > 0) params.set("lotSize", String(lotSize));
+  if (result.riskAmount > 0)
+    params.set("riskAmount", String(result.riskAmount));
+  // Carry the suggested leverage so the journal form + auto-place use it
+  // instead of falling back to the hardcoded default. Use the "safe"
+  // (50% buffer) value rather than rounded — rounded matches SL→liq
+  // exactly which is risky if Bitget mark price wicks past SL.
+  // Always FLOOR — never round up; less leverage = more margin = safer.
+  if (result.leverage && result.market === "CRYPTO") {
+    const safeLev = Math.max(1, Math.floor(result.leverage.safe));
+    params.set("leverage", String(safeLev));
+  }
+  params.set(
+    "setup",
+    `Tính từ Calculator: risk ${result.riskAmount}, ${result.market === "CRYPTO" ? `${lotSize} units` : `${lotSize} lots`}${result.leverage ? `, gợi ý ${result.leverage.rounded}x (an toàn ${Math.floor(result.leverage.safe)}x)` : ""}`,
+  );
+
+  const disabled = !hasPriceMode || lotSize <= 0;
+
+  return (
+    <div className="space-y-2">
+      <Button
+        className="w-full"
+        disabled={disabled}
+        render={
+          <Link
+            href={`/journal/new?${params.toString()}`}
+            aria-disabled={disabled}
+          />
+        }
+      >
+        <NotebookPen className="size-4" />
+        Tạo lệnh trong Nhật ký
+      </Button>
+      {disabled ? (
+        <p className="text-[11px] text-muted-foreground">
+          Cần điền giá vào + giá Stop loss để dùng nút này.
+        </p>
+      ) : (
+        <p className="text-[11px] leading-relaxed text-muted-foreground">
+          Mở form Nhật ký với các trường đã điền sẵn ({symbolParam}, {direction},
+          {" "}vào {entry}, SL {stop}, {result.market === "CRYPTO" ? `${lotSize} units` : `${lotSize} lots`}).
+          Trong form bạn có thể bật toggle &ldquo;Đặt lệnh thật trên Bitget&rdquo;
+          để tự gửi sang sàn.
+        </p>
+      )}
+    </div>
   );
 }
 
@@ -554,6 +753,174 @@ function Row({
       >
         {value}
       </span>
+    </div>
+  );
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// Binance order hint — copy-paste-friendly numbers + which field to use
+// ──────────────────────────────────────────────────────────────────────
+// ──────────────────────────────────────────────────────────────────────
+// Forex rounding options — brokers accept 0.01 step, so show the two
+// nearest valid lot sizes alongside the exact answer, with the real
+// dollar risk each one produces. Helps user pick "0.02 = $4" vs
+// "0.03 = $6" instead of doing the math themselves.
+// ──────────────────────────────────────────────────────────────────────
+function ForexRoundingOptions({
+  exactLots,
+  stopLossPips,
+  pipValuePerLot,
+  accountCcy,
+}: {
+  exactLots: number;
+  stopLossPips: number;
+  pipValuePerLot: number;
+  accountCcy: string;
+}) {
+  const fmt = (n: number, dp = 2) =>
+    new Intl.NumberFormat("en-US", {
+      minimumFractionDigits: dp,
+      maximumFractionDigits: dp,
+    }).format(n);
+
+  if (
+    !Number.isFinite(exactLots) ||
+    exactLots <= 0 ||
+    !Number.isFinite(stopLossPips) ||
+    !Number.isFinite(pipValuePerLot)
+  ) {
+    return null;
+  }
+
+  const floorLots = Math.floor(exactLots * 100) / 100;
+  const ceilLots = Math.ceil(exactLots * 100) / 100;
+
+  // If the exact value already lands on a 0.01 multiple, there's nothing
+  // to round — skip the section.
+  if (floorLots === ceilLots) return null;
+
+  const riskPerLot = stopLossPips * pipValuePerLot;
+  const floorRisk = floorLots * riskPerLot;
+  const ceilRisk = ceilLots * riskPerLot;
+
+  // Render with the same label-left / value-right format as the
+  // "Standard Lots" row above so every lot number sits in the SAME
+  // right column. Previously this section had its own layout with the
+  // lot number on the left, breaking visual alignment.
+  return (
+    <>
+      <Row
+        label="Làm tròn xuống"
+        value={`${fmt(floorLots, 2)}  ·  risk ${accountCcy} ${fmt(floorRisk)}`}
+      />
+      <Row
+        label="Làm tròn lên"
+        value={`${fmt(ceilLots, 2)}  ·  risk ${accountCcy} ${fmt(ceilRisk)}`}
+      />
+    </>
+  );
+}
+
+function BinanceOrderHint({
+  base,
+  quoteCcy,
+  units,
+  notional,
+}: {
+  base: string;
+  quoteCcy: string;
+  units: number;
+  notional: number;
+}) {
+  const fmt = (n: number, dp = 2) =>
+    new Intl.NumberFormat("en-US", {
+      minimumFractionDigits: dp,
+      maximumFractionDigits: dp,
+    }).format(n);
+
+  return (
+    <div className="space-y-3 rounded-md border border-bullish/40 bg-bullish/5 p-3">
+      <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+        Nhập trên sàn (Binance Futures)
+      </div>
+
+      <p className="text-[11px] leading-relaxed text-muted-foreground">
+        Trên Binance, ô <strong>Quantity</strong> có dropdown đổi đơn vị giữa{" "}
+        <strong>{base}</strong> và <strong>{quoteCcy}</strong>. Chọn 1 trong 2,
+        nhập đúng số bên dưới.
+      </p>
+
+      <div className="space-y-2">
+        <CopyRow label={`Quantity (${quoteCcy})`} value={fmt(notional)} highlight />
+        <CopyRow label={`Quantity (${base})`} value={fmt(units, 8)} />
+      </div>
+
+      <div className="rounded-md border border-warning/40 bg-warning/10 p-2 text-[11px] leading-relaxed text-warning">
+        <strong>⚠️ Đừng nhập số này vào ô Cost/Margin.</strong> Đây là{" "}
+        <strong>notional</strong> (giá trị vị thế), không phải margin. Margin
+        sàn tự lock — bạn không cần nhập.
+      </div>
+    </div>
+  );
+}
+
+function CopyRow({
+  label,
+  value,
+  highlight,
+  muted,
+}: {
+  label: string;
+  value: string;
+  highlight?: boolean;
+  muted?: boolean;
+}) {
+  const [copied, setCopied] = React.useState(false);
+  const onCopy = () => {
+    if (typeof navigator === "undefined" || !navigator.clipboard) return;
+    // Strip thousands separators from the display value before copying so
+    // the user can paste straight into Binance without manually cleaning.
+    const clean = value.replace(/[, ]/g, "").replace(/[^\d.\-]/g, "");
+    navigator.clipboard.writeText(clean).then(() => {
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1200);
+    });
+  };
+
+  return (
+    <div
+      className={cn(
+        "flex items-center justify-between gap-2 rounded-md border px-2.5 py-1.5",
+        highlight
+          ? "border-bullish/50 bg-bullish/10"
+          : muted
+            ? "border-border/50 bg-muted/30"
+            : "border-border bg-card/40",
+      )}
+    >
+      <span
+        className={cn(
+          "text-xs",
+          highlight ? "font-medium text-foreground" : "text-muted-foreground",
+        )}
+      >
+        {label}
+      </span>
+      <button
+        type="button"
+        onClick={onCopy}
+        className={cn(
+          "num group flex items-center gap-1.5 text-sm font-medium transition",
+          highlight ? "text-bullish" : "text-foreground",
+        )}
+        aria-label={`Copy ${label}`}
+        title="Click để copy"
+      >
+        <span>{value}</span>
+        <span className="text-[10px] uppercase opacity-50 group-hover:opacity-100">
+          {copied ? "đã copy" : "copy"}
+        </span>
+      </button>
     </div>
   );
 }
