@@ -32,6 +32,7 @@ model User {
   analysisRuns   AnalysisRun[]
   strategies     Strategy[]
   tags           Tag[]
+  tradingSystems TradingSystem[]
 }
 
 // ──────────────────────────────────────────────────────────────────────
@@ -99,10 +100,11 @@ model Tag {
 }
 
 model TradeJournal {
-  id         String  @id @default(cuid())
-  userId     String
-  accountId  String?
-  strategyId String?
+  id              String  @id @default(cuid())
+  userId          String
+  accountId       String?
+  strategyId      String?
+  tradingSystemId String?
 
   symbol    String
   market    MarketType     @default(FOREX)
@@ -128,18 +130,58 @@ model TradeJournal {
   mistakes String? @db.Text
   emotion  String?
 
+  // Snapshot of the checklist state at trade creation. Stored as JSON so the
+  // history is preserved even when the underlying TradingSystem is edited or
+  // deleted. Shape: [{ label, required, checked }].
+  systemChecks Json?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  user        User              @relation(fields: [userId], references: [id], onDelete: Cascade)
-  account     TradingAccount?   @relation(fields: [accountId], references: [id], onDelete: SetNull)
-  strategy    Strategy?         @relation(fields: [strategyId], references: [id], onDelete: SetNull)
-  screenshots TradeScreenshot[]
-  tags        TradeJournalTag[]
+  user          User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  account       TradingAccount?  @relation(fields: [accountId], references: [id], onDelete: SetNull)
+  strategy      Strategy?        @relation(fields: [strategyId], references: [id], onDelete: SetNull)
+  tradingSystem TradingSystem?   @relation(fields: [tradingSystemId], references: [id], onDelete: SetNull)
+  screenshots   TradeScreenshot[]
+  tags          TradeJournalTag[]
 
   @@index([userId, openedAt])
   @@index([userId, status])
   @@index([symbol])
+  @@index([tradingSystemId])
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// Trading system — pre-trade checklist
+// ──────────────────────────────────────────────────────────────────────
+
+model TradingSystem {
+  id        String   @id @default(cuid())
+  userId    String
+  name      String
+  notes     String?  @db.Text
+  isDefault Boolean  @default(false)
+  archived  Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user   User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  items  TradingSystemItem[]
+  trades TradeJournal[]
+
+  @@index([userId, archived])
+}
+
+model TradingSystemItem {
+  id       String  @id @default(cuid())
+  systemId String
+  label    String  @db.VarChar(255)
+  required Boolean @default(false)
+  order    Int     @default(0)
+
+  system TradingSystem @relation(fields: [systemId], references: [id], onDelete: Cascade)
+
+  @@index([systemId, order])
 }
 
 model TradeJournalTag {
@@ -293,6 +335,9 @@ enum ApiKeyKind {
   ETHERSCAN
   BSCSCAN
   COINGECKO
+  BITGET
+  METAAPI
+  TELEGRAM
   CUSTOM
 }
 
@@ -322,4 +367,66 @@ model AppSetting {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, key])
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// Broker orders — real positions placed from the journal
+// ──────────────────────────────────────────────────────────────────────
+
+enum BrokerOrderStatus {
+  PENDING       // row created, awaiting broker response
+  PLACED        // accepted by broker, externalOrderId set, SL verified
+  PLACED_NO_SL  // accepted but post-place SL verification failed
+  FILLED        // limit order has been matched on Bitget; position is now open
+  FAILED        // broker rejected; see errorCode/errorMessage
+  CANCELLED
+  UNKNOWN       // network error mid-call; needs reconciliation
+}
+
+model BrokerOrder {
+  id              String   @id @default(cuid())
+  userId          String
+  tradeJournalId  String
+  broker          String   // "BITGET" — matches BrokerKind in lib/brokers/store.ts
+  clientOid       String   // "tj_<journalId>_<attempt>"
+  attempt         Int      @default(1)
+  externalOrderId String?
+
+  status BrokerOrderStatus @default(PENDING)
+
+  symbol           String
+  side             String  // "buy" | "sell"
+  orderType        String  // "limit" | "market"
+  productType      String  // "USDT-FUTURES"
+  marginCoin       String  // "USDT"
+  marginMode       String  // "isolated" | "crossed"
+  posMode          String  // "one_way_mode" at time of placement
+  leverage         Int
+
+  // Values sent to Bitget byte-for-byte (post-normalization).
+  size             String
+  price            String?
+  presetStopLoss   String?
+  presetTakeProfit String?
+
+  // Audit: what the user actually requested before normalization.
+  requestedSize    Decimal? @db.Decimal(20, 8)
+  requestedPrice   Decimal? @db.Decimal(20, 8)
+
+  // Stored bodies (NO signed headers — safe to surface to the user).
+  sentBody        Json?
+  rawResponse    Json?
+
+  // Error fields (set on FAILED/PLACED_NO_SL).
+  errorStage      String?  // "validate" | "set_leverage" | "place_order" | "verify_sl"
+  errorCode       String?
+  errorMessage    String?  @db.Text
+
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@unique([broker, clientOid])
+  @@index([userId, createdAt])
+  @@index([tradeJournalId])
+  @@index([status])
 }
