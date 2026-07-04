@@ -3,6 +3,7 @@ import { Download, Plus } from "lucide-react";
 import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
 import { JournalClient } from "./journal-client";
+import { TradingSystemsSheet } from "./trading-systems-sheet";
 
 export default function JournalPage() {
   return (
@@ -12,6 +13,7 @@ export default function JournalPage() {
         description="Ghi lệnh, đính kèm setup, gắn tag, theo dõi P/L và R-multiple."
         actions={
           <>
+            <TradingSystemsSheet />
             <Button variant="outline" render={<Link href="/journal/import" />}>
               <Download className="size-4" />
               Nhập từ MT4/MT5

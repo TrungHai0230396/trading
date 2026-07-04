@@ -1,8 +1,11 @@
+import type { SystemCheckSnapshot } from "@/lib/trading-systems/schema";
+
 export type SerializedTrade = {
   id: string;
   userId: string;
   accountId: string | null;
   strategyId: string | null;
+  tradingSystemId: string | null;
   symbol: string;
   market: string;
   direction: string;
@@ -23,6 +26,7 @@ export type SerializedTrade = {
   notes: string | null;
   mistakes: string | null;
   emotion: string | null;
+  systemChecks: SystemCheckSnapshot[] | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -32,6 +36,7 @@ export type TradeDetail = SerializedTrade & {
   tags: { id: string; name: string; color: string | null }[];
   strategy: { id: string; name: string } | null;
   account: { id: string; name: string; currency: string } | null;
+  tradingSystem: { id: string; name: string } | null;
 };
 
 export type JournalStats = {

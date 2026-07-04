@@ -1,4 +1,5 @@
 import type { Prisma } from "@/generated/prisma";
+import type { SystemCheckSnapshot } from "@/lib/trading-systems/schema";
 
 type DecimalLike = { toString(): string } | number | null | undefined;
 
@@ -15,6 +16,7 @@ export type SerializedTrade = {
   userId: string;
   accountId: string | null;
   strategyId: string | null;
+  tradingSystemId: string | null;
 
   symbol: string;
   market: string;
@@ -40,6 +42,8 @@ export type SerializedTrade = {
   mistakes: string | null;
   emotion: string | null;
 
+  systemChecks: SystemCheckSnapshot[] | null;
+
   createdAt: string;
   updatedAt: string;
 };
@@ -49,6 +53,7 @@ type TradeRow = {
   userId: string;
   accountId: string | null;
   strategyId: string | null;
+  tradingSystemId: string | null;
   symbol: string;
   market: string;
   direction: string;
@@ -69,9 +74,32 @@ type TradeRow = {
   notes: string | null;
   mistakes: string | null;
   emotion: string | null;
+  systemChecks: Prisma.JsonValue | null;
   createdAt: Date;
   updatedAt: Date;
 };
+
+/**
+ * Defensive JSON unwrap — JSON columns are `unknown`-shaped at the DB layer.
+ * We accept anything resembling our snapshot shape and drop bad rows rather
+ * than throwing (history reads should never break the UI).
+ */
+function parseSystemChecks(value: Prisma.JsonValue | null): SystemCheckSnapshot[] | null {
+  if (value === null || value === undefined) return null;
+  if (!Array.isArray(value)) return null;
+  const out: SystemCheckSnapshot[] = [];
+  for (const entry of value) {
+    if (!entry || typeof entry !== "object") continue;
+    const e = entry as Record<string, unknown>;
+    if (typeof e.label !== "string") continue;
+    out.push({
+      label: e.label,
+      required: Boolean(e.required),
+      checked: Boolean(e.checked),
+    });
+  }
+  return out.length > 0 ? out : null;
+}
 
 export function serializeTrade(t: TradeRow): SerializedTrade {
   return {
@@ -79,6 +107,7 @@ export function serializeTrade(t: TradeRow): SerializedTrade {
     userId: t.userId,
     accountId: t.accountId,
     strategyId: t.strategyId,
+    tradingSystemId: t.tradingSystemId,
     symbol: t.symbol,
     market: t.market,
     direction: t.direction,
@@ -99,6 +128,7 @@ export function serializeTrade(t: TradeRow): SerializedTrade {
     notes: t.notes,
     mistakes: t.mistakes,
     emotion: t.emotion,
+    systemChecks: parseSystemChecks(t.systemChecks),
     createdAt: t.createdAt.toISOString(),
     updatedAt: t.updatedAt.toISOString(),
   };

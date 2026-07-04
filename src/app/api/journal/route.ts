@@ -125,6 +125,18 @@ export async function POST(req: Request) {
       );
     }
   }
+  if (input.tradingSystemId) {
+    const ok = await db.tradingSystem.findFirst({
+      where: { id: input.tradingSystemId, userId },
+      select: { id: true },
+    });
+    if (!ok) {
+      return NextResponse.json(
+        { error: "Hệ thống giao dịch không tồn tại" },
+        { status: 400 },
+      );
+    }
+  }
 
   // Compute derived values.
   let pnl = input.pnl;
@@ -180,6 +192,12 @@ export async function POST(req: Request) {
         emotion: input.emotion ?? null,
         ...(input.strategyId ? { strategyId: input.strategyId } : {}),
         ...(input.accountId ? { accountId: input.accountId } : {}),
+        ...(input.tradingSystemId
+          ? { tradingSystemId: input.tradingSystemId }
+          : {}),
+        ...(input.systemChecks
+          ? { systemChecks: input.systemChecks }
+          : {}),
         ...(tagConnect.length
           ? {
               tags: {

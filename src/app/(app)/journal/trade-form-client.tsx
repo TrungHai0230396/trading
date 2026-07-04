@@ -3,7 +3,7 @@
 import * as React from "react";
 import Image from "next/image";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { ArrowLeft, ChevronLeft, ChevronRight, Download, Save, Trash2, X } from "lucide-react";
@@ -40,6 +40,17 @@ import {
 } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import type { TradeDetail } from "@/lib/journal/types";
+import {
+  TradingSystemCard,
+  countUnmetRequired,
+  makeInitialChecksFor,
+  type TradingSystemCardState,
+} from "./trading-system-card";
+import {
+  AutoPlaceDialog,
+  type AutoPlacePayload,
+} from "./auto-place-dialog";
+import { Switch } from "@/components/ui/switch";
 
 // ──────────────────────────────────────────────────────────────────────
 // Types
@@ -67,6 +78,10 @@ type FormState = {
   mistakes: string;
   emotion: string;
   tagNames: string;
+  // Crypto futures leverage for the auto-place broker order. Stored as
+  // string so the input can be empty mid-typing; coerced to number when
+  // we build the broker payload.
+  leverage: string;
 };
 
 type ScreenshotItem = TradeDetail["screenshots"][number];
@@ -128,6 +143,7 @@ const INITIAL: FormState = {
   mistakes: "",
   emotion: "",
   tagNames: "",
+  leverage: "10",
 };
 
 function fromTrade(t: TradeDetail): FormState {
@@ -152,10 +168,65 @@ function fromTrade(t: TradeDetail): FormState {
     mistakes: t.mistakes ?? "",
     emotion: t.emotion ?? "",
     tagNames: t.tags.map((tg) => tg.name).join(", "),
+    // Existing trades don't carry leverage in DB — keep the default so the
+    // field is still editable when the user opens the form.
+    leverage: "10",
   };
 }
 
 // ──────────────────────────────────────────────────────────────────────
+/**
+ * Overlay URL-search-param values onto a base form state. Used when the
+ * scanner analysis page deep-links to /journal/new?symbol=...&entryPrice=...
+ *
+ * Only runs in NEW mode — we never want to clobber a loaded trade in
+ * edit mode just because the URL happens to have stray params.
+ */
+function applyPrefillFromParams(
+  base: FormState,
+  params: URLSearchParams | null,
+): FormState {
+  if (!params) return base;
+  const next: FormState = { ...base };
+  const symbol = params.get("symbol");
+  if (symbol) next.symbol = symbol.toUpperCase();
+  const market = params.get("market");
+  if (
+    market === "FOREX" ||
+    market === "CRYPTO" ||
+    market === "STOCK" ||
+    market === "COMMODITY" ||
+    market === "INDEX" ||
+    market === "OTHER"
+  )
+    next.market = market;
+  const direction = params.get("direction");
+  if (direction === "LONG" || direction === "SHORT") next.direction = direction;
+  const timeframe = params.get("timeframe");
+  if (timeframe) next.timeframe = timeframe;
+  const entryPrice = params.get("entryPrice");
+  if (entryPrice) next.entryPrice = entryPrice;
+  const stopLoss = params.get("stopLoss");
+  if (stopLoss) next.stopLoss = stopLoss;
+  const takeProfit = params.get("takeProfit");
+  if (takeProfit) next.takeProfit = takeProfit;
+  const lotSize = params.get("lotSize");
+  if (lotSize) next.lotSize = lotSize;
+  const riskAmount = params.get("riskAmount");
+  if (riskAmount) next.riskAmount = riskAmount;
+  const setup = params.get("setup");
+  if (setup) next.setup = setup.slice(0, 2000); // schema cap
+  const leverage = params.get("leverage");
+  if (leverage) {
+    // Always floor; never round up. Lower leverage = safer.
+    const lev = Math.floor(Number(leverage));
+    if (Number.isFinite(lev) && lev >= 1 && lev <= 125) {
+      next.leverage = String(lev);
+    }
+  }
+  return next;
+}
+
 // Component
 // ──────────────────────────────────────────────────────────────────────
 export function TradeFormClient({
@@ -167,12 +238,55 @@ export function TradeFormClient({
 }) {
   const router = useRouter();
   const queryClient = useQueryClient();
-  const [state, setState] = React.useState<FormState>(() =>
-    trade ? fromTrade(trade) : INITIAL,
-  );
+  const searchParams = useSearchParams();
+  const [state, setState] = React.useState<FormState>(() => {
+    if (trade) return fromTrade(trade);
+    // NEW mode only: pull prefills from URL.
+    return mode === "new"
+      ? applyPrefillFromParams(INITIAL, searchParams)
+      : INITIAL;
+  });
   const [screenshots, setScreenshots] = React.useState<ScreenshotItem[]>(
     trade?.screenshots ?? [],
   );
+  const [systemState, setSystemState] = React.useState<TradingSystemCardState>(
+    () => ({
+      tradingSystemId: trade?.tradingSystemId ?? null,
+      systemChecks: makeInitialChecksFor(trade?.systemChecks ?? null),
+    }),
+  );
+  const [pendingSubmit, setPendingSubmit] = React.useState(false);
+  // ── Auto-place toggle state ───────────────────────────────────────────
+  // Default OFF. The toggle only becomes enable-able when:
+  //   - mode === "new"
+  //   - market === "CRYPTO"
+  //   - Bitget creds are connected (status fetch below)
+  // After the journal save completes, we open the confirm dialog with
+  // the saved tradeJournalId — the dialog calls POST /broker/order.
+  const [autoPlaceEnabled, setAutoPlaceEnabled] = React.useState(false);
+  const [bitgetConnected, setBitgetConnected] = React.useState<boolean | null>(
+    null,
+  );
+  const [autoPlacePayload, setAutoPlacePayload] =
+    React.useState<AutoPlacePayload | null>(null);
+  const submitLockRef = React.useRef(false);
+  React.useEffect(() => {
+    if (mode !== "new") return;
+    let cancelled = false;
+    fetch("/api/brokers/bitget/keys")
+      .then((r) => r.json())
+      .then((j) => {
+        if (!cancelled) setBitgetConnected(!!j?.connected);
+      })
+      .catch(() => {
+        if (!cancelled) setBitgetConnected(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [mode]);
+  const canAutoPlace =
+    mode === "new" && state.market === "CRYPTO" && bitgetConnected === true;
   const [uploadCaption, setUploadCaption] = React.useState("");
   const [uploadKind, setUploadKind] = React.useState<"" | "before" | "during" | "after">("");
   const [uploadUrl, setUploadUrl] = React.useState("");
@@ -257,6 +371,11 @@ export function TradeFormClient({
         ...(empty(state.mistakes) ? {} : { mistakes: state.mistakes.trim() }),
         ...(empty(state.emotion) ? {} : { emotion: state.emotion.trim() }),
         ...(tagNames.length > 0 ? { tagNames } : {}),
+        // Trading system / checklist.
+        tradingSystemId: systemState.tradingSystemId ?? null,
+        systemChecks: systemState.systemChecks.length > 0
+          ? systemState.systemChecks
+          : null,
       };
 
       const url =
@@ -274,6 +393,30 @@ export function TradeFormClient({
     onSuccess: (data) => {
       toast.success(mode === "new" ? "Đã tạo lệnh" : "Đã cập nhật");
       queryClient.invalidateQueries({ queryKey: ["journal"] });
+      // If auto-place is on, open the broker confirm dialog with the
+      // saved journal id. We delay router.push until the dialog closes
+      // so the user stays on the form for the broker step.
+      if (
+        mode === "new" &&
+        autoPlaceEnabled &&
+        canAutoPlace &&
+        !empty(state.entryPrice) &&
+        !empty(state.lotSize)
+      ) {
+        setAutoPlacePayload({
+          tradeJournalId: data.id,
+          symbol: state.symbol.trim().toUpperCase(),
+          direction: state.direction,
+          units: num(state.lotSize),
+          entryPrice: num(state.entryPrice),
+          stopLoss: empty(state.stopLoss) ? undefined : num(state.stopLoss),
+          takeProfit: empty(state.takeProfit) ? undefined : num(state.takeProfit),
+          leverage: Math.max(1, Math.min(125, Math.floor(num(state.leverage)) || 10)),
+          marginMode: "isolated",
+        });
+        // Don't navigate yet — wait for dialog close.
+        return;
+      }
       if (mode === "new") {
         router.push(`/journal/${data.id}`);
       } else {
@@ -460,6 +603,14 @@ export function TradeFormClient({
           />
         ) : null}
       </div>
+
+      <TradingSystemCard
+        mode={mode}
+        initialTradingSystemId={trade?.tradingSystemId ?? null}
+        initialSystemChecks={trade?.systemChecks ?? []}
+        state={systemState}
+        onChange={setSystemState}
+      />
 
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
         {/* ─── Left column: core fields ─────────────────────────── */}
@@ -1080,6 +1231,79 @@ export function TradeFormClient({
         </CardContent>
       </Card>
 
+      {mode === "new" ? (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Đặt lệnh thật trên Bitget</CardTitle>
+            <CardDescription>
+              Sau khi tạo lệnh trong nhật ký, tự động gửi lệnh limit sang Bitget USDT-Futures.
+              Lệnh có Stop Loss / Take Profit nếu bạn điền ở trên.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div className="flex items-center justify-between gap-3 rounded-md border bg-card/40 p-3">
+              <div className="space-y-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Switch
+                    id="auto-place"
+                    checked={autoPlaceEnabled && canAutoPlace}
+                    disabled={!canAutoPlace}
+                    onCheckedChange={(v) => setAutoPlaceEnabled(!!v)}
+                  />
+                  <Label htmlFor="auto-place" className="cursor-pointer">
+                    Tự đặt lệnh trên Bitget khi lưu
+                  </Label>
+                  {autoPlaceEnabled && canAutoPlace ? (
+                    <Badge variant="destructive" className="text-[10px]">
+                      Lệnh thật
+                    </Badge>
+                  ) : null}
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  {bitgetConnected === null
+                    ? "Đang kiểm tra kết nối Bitget…"
+                    : !bitgetConnected
+                      ? "Chưa kết nối Bitget. Vào Cài đặt → Sàn giao dịch để thêm API key."
+                      : state.market !== "CRYPTO"
+                        ? "Chỉ hỗ trợ thị trường CRYPTO trong giai đoạn này."
+                        : "Khối lượng dưới đây là số coin gốc (vd 0.001 BTC), KHÔNG phải lot forex."}
+                </p>
+              </div>
+            </div>
+
+            {canAutoPlace ? (
+              <div className="grid grid-cols-[120px_1fr] items-center gap-3 rounded-md border bg-card/40 p-3">
+                <Label htmlFor="leverage">Đòn bẩy (x)</Label>
+                <Input
+                  id="leverage"
+                  inputMode="numeric"
+                  className="num"
+                  value={state.leverage}
+                  onChange={(e) =>
+                    update(
+                      "leverage",
+                      e.target.value.replace(/[^0-9]/g, ""),
+                    )
+                  }
+                  placeholder="10"
+                />
+                <span className="col-span-2 text-xs text-muted-foreground">
+                  Gợi ý từ Calculator (an toàn — buffer 50%, làm tròn xuống) được tự điền nếu bạn
+                  đi từ trang Tính khối lượng. Cho phép 1–125x. Mặc định 10x.
+                </span>
+              </div>
+            ) : null}
+
+            {autoPlaceEnabled && canAutoPlace ? (
+              <p className="text-xs text-muted-foreground">
+                Khi nhấn “Tạo lệnh”, nhật ký được lưu trước; sau đó một hộp xác nhận
+                sẽ hiện ra với thông tin lệnh thật để bạn duyệt.
+              </p>
+            ) : null}
+          </CardContent>
+        </Card>
+      ) : null}
+
       <div className="flex items-center justify-end gap-2">
         <Button
           variant="ghost"
@@ -1090,7 +1314,19 @@ export function TradeFormClient({
         <Button
           type="button"
           disabled={!validForm || submit.isPending}
-          onClick={() => submit.mutate()}
+          onClick={() => {
+            if (submitLockRef.current) return;
+            submitLockRef.current = true;
+            setTimeout(() => {
+              submitLockRef.current = false;
+            }, 1500);
+            const missing = countUnmetRequired(systemState.systemChecks);
+            if (missing > 0) {
+              setPendingSubmit(true);
+              return;
+            }
+            submit.mutate();
+          }}
         >
           <Save className="size-4" />
           {submit.isPending
@@ -1100,7 +1336,63 @@ export function TradeFormClient({
               : "Lưu thay đổi"}
         </Button>
       </div>
+
+      <ChecklistWarnDialog
+        open={pendingSubmit}
+        onOpenChange={setPendingSubmit}
+        missingCount={countUnmetRequired(systemState.systemChecks)}
+        onConfirm={() => {
+          setPendingSubmit(false);
+          submit.mutate();
+        }}
+      />
+
+      <AutoPlaceDialog
+        open={autoPlacePayload !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            const id = autoPlacePayload?.tradeJournalId;
+            setAutoPlacePayload(null);
+            if (id) router.push(`/journal/${id}`);
+          }
+        }}
+        payload={autoPlacePayload}
+      />
     </div>
+  );
+}
+
+function ChecklistWarnDialog({
+  open,
+  onOpenChange,
+  missingCount,
+  onConfirm,
+}: {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  missingCount: number;
+  onConfirm: () => void;
+}) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Bỏ qua checklist bắt buộc?</DialogTitle>
+          <DialogDescription>
+            Bạn còn {missingCount} mục bắt buộc trong hệ thống chưa tick. Bạn
+            có chắc muốn tạo lệnh không?
+          </DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <Button variant="ghost" onClick={() => onOpenChange(false)}>
+            Quay lại tick
+          </Button>
+          <Button variant="destructive" onClick={onConfirm}>
+            Vẫn tạo lệnh
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 

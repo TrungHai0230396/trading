@@ -1,8 +1,10 @@
 import { notFound } from "next/navigation";
+import { Suspense } from "react";
 import { auth } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { PageHeader } from "@/components/page-header";
 import { TradeFormClient } from "../trade-form-client";
+import { BrokerOrderPanel } from "../broker-order-panel";
 import { serializeTrade } from "@/lib/journal/serialize";
 import type { TradeDetail } from "@/lib/journal/types";
 
@@ -24,6 +26,7 @@ export default async function EditTradePage({
       tags: { include: { tag: true } },
       strategy: true,
       account: true,
+      tradingSystem: { select: { id: true, name: true } },
     },
   });
 
@@ -55,6 +58,9 @@ export default async function EditTradePage({
           currency: trade.account.currency,
         }
       : null,
+    tradingSystem: trade.tradingSystem
+      ? { id: trade.tradingSystem.id, name: trade.tradingSystem.name }
+      : null,
   };
 
   return (
@@ -63,7 +69,15 @@ export default async function EditTradePage({
         title={`${detail.symbol} • ${detail.direction}`}
         description={`${detail.market} · ${detail.status}`}
       />
-      <TradeFormClient mode="edit" trade={detail} />
+      {/* Suspense required because TradeFormClient uses useSearchParams
+          (Next 16). Edit mode ignores the params, but the hook still
+          runs unconditionally. */}
+      <div className="space-y-4">
+        <BrokerOrderPanel tradeJournalId={detail.id} />
+        <Suspense fallback={null}>
+          <TradeFormClient mode="edit" trade={detail} />
+        </Suspense>
+      </div>
     </div>
   );
 }

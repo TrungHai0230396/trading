@@ -5,9 +5,9 @@ import { tradePatchSchema } from "@/lib/journal/schema";
 import { derivePnl, deriveRMultiple } from "@/lib/journal/derive";
 import { serializeTrade } from "@/lib/journal/serialize";
 import { resolveTagIds } from "@/lib/journal/tags";
+import { Prisma } from "@/generated/prisma";
 import type {
   MarketType,
-  Prisma,
   TradeDirection,
   TradeStatus,
 } from "@/generated/prisma";
@@ -28,6 +28,7 @@ export async function GET(_req: Request, { params }: RouteCtx) {
       tags: { include: { tag: true } },
       strategy: true,
       account: true,
+      tradingSystem: { select: { id: true, name: true } },
     },
   });
   if (!trade) {
@@ -57,6 +58,9 @@ export async function GET(_req: Request, { params }: RouteCtx) {
           name: trade.account.name,
           currency: trade.account.currency,
         }
+      : null,
+    tradingSystem: trade.tradingSystem
+      ? { id: trade.tradingSystem.id, name: trade.tradingSystem.name }
       : null,
   });
 }
@@ -113,6 +117,43 @@ export async function PATCH(req: Request, { params }: RouteCtx) {
       return NextResponse.json(
         { error: "Tài khoản không tồn tại" },
         { status: 400 },
+      );
+    }
+  }
+  if (input.tradingSystemId) {
+    const ok = await db.tradingSystem.findFirst({
+      where: { id: input.tradingSystemId, userId },
+      select: { id: true },
+    });
+    if (!ok) {
+      return NextResponse.json(
+        { error: "Hệ thống giao dịch không tồn tại" },
+        { status: 400 },
+      );
+    }
+  }
+
+  // Guard against desync with a live broker order: if the user flips the
+  // journal to CANCELED while a real limit order is still PLACED on Bitget,
+  // the order can still fill — the journal would lie. Force them through the
+  // real cancel path first. (CLOSED is allowed: the user may have closed the
+  // position manually on Bitget; sync will reconcile PnL.)
+  if (input.status === "CANCELED" && existing.status !== "CANCELED") {
+    const livePlaced = await db.brokerOrder.findFirst({
+      where: {
+        tradeJournalId: id,
+        userId,
+        status: { in: ["PLACED", "PLACED_NO_SL"] },
+      },
+      select: { id: true },
+    });
+    if (livePlaced) {
+      return NextResponse.json(
+        {
+          error:
+            "Còn lệnh thật đang treo trên Bitget. Dùng nút “Huỷ lệnh trên Bitget” để huỷ — trạng thái nhật ký sẽ tự chuyển sang Đã huỷ.",
+        },
+        { status: 409 },
       );
     }
   }
@@ -202,6 +243,12 @@ export async function PATCH(req: Request, { params }: RouteCtx) {
     ...(input.accountId !== undefined
       ? { accountId: input.accountId ?? null }
       : {}),
+    ...(input.tradingSystemId !== undefined
+      ? { tradingSystemId: input.tradingSystemId ?? null }
+      : {}),
+    ...(input.systemChecks !== undefined
+      ? { systemChecks: input.systemChecks ?? Prisma.DbNull }
+      : {}),
     pnl: pnl ?? null,
     rMultiple: rMultiple ?? null,
   };
@@ -244,6 +291,29 @@ export async function DELETE(_req: Request, { params }: RouteCtx) {
   });
   if (!existing) {
     return NextResponse.json({ error: "Không tìm thấy" }, { status: 404 });
+  }
+
+  // BrokerOrder has no FK cascade to TradeJournal, and deleting the journal
+  // would orphan the row AND leave any live Bitget order/position with no
+  // in-app path to manage it. Block the delete while a real order is live.
+  const liveBrokerOrder = await db.brokerOrder.findFirst({
+    where: {
+      tradeJournalId: id,
+      userId: session.user.id,
+      status: { in: ["PENDING", "PLACED", "PLACED_NO_SL", "FILLED"] },
+    },
+    select: { id: true, status: true },
+  });
+  if (liveBrokerOrder) {
+    return NextResponse.json(
+      {
+        error:
+          liveBrokerOrder.status === "FILLED"
+            ? "Mục này có vị thế thật đang mở trên Bitget. Đóng vị thế trước khi xoá nhật ký."
+            : "Mục này có lệnh thật đang treo trên Bitget. Huỷ lệnh (nút “Huỷ lệnh trên Bitget”) trước khi xoá nhật ký.",
+      },
+      { status: 409 },
+    );
   }
 
   await db.tradeJournal.delete({ where: { id } });

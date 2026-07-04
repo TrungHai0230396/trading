@@ -9,6 +9,13 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { auth } from "@/lib/auth";
+import {
+  BitgetBrokerCard,
+  ConsensusAlertCard,
+  MetaApiBrokerCard,
+  RiskLimitsCard,
+  TelegramNotifyCard,
+} from "./brokers-client";
 
 const API_KEY_DEFINITIONS = [
   {
@@ -54,12 +61,21 @@ export default async function SettingsPage() {
         description="API keys, thông tin tài khoản và tùy chọn mặc định."
       />
 
-      <Tabs defaultValue="keys">
+      <Tabs defaultValue="brokers">
         <TabsList>
+          <TabsTrigger value="brokers">Sàn giao dịch</TabsTrigger>
           <TabsTrigger value="keys">API keys</TabsTrigger>
           <TabsTrigger value="account">Tài khoản</TabsTrigger>
           <TabsTrigger value="preferences">Tùy chọn</TabsTrigger>
         </TabsList>
+
+        <TabsContent value="brokers" className="mt-4 space-y-4">
+          <BitgetBrokerCard />
+          <RiskLimitsCard />
+          <TelegramNotifyCard />
+          <ConsensusAlertCard />
+          <MetaApiBrokerCard />
+        </TabsContent>
 
         <TabsContent value="keys" className="mt-4">
           <Card>

@@ -2,10 +2,23 @@
 
 import * as React from "react";
 import Link from "next/link";
-import { useQuery, keepPreviousData } from "@tanstack/react-query";
+import {
+  useMutation,
+  useQuery,
+  useQueryClient,
+  keepPreviousData,
+} from "@tanstack/react-query";
 import { format, formatDistanceToNow, parseISO } from "date-fns";
 import { vi } from "date-fns/locale";
-import { BookOpenText, ChevronRight, Filter, RefreshCw } from "lucide-react";
+import { toast } from "sonner";
+import {
+  BookOpenText,
+  ChevronRight,
+  Filter,
+  Loader2,
+  RefreshCcw,
+  RefreshCw,
+} from "lucide-react";
 
 import {
   Card,
@@ -81,6 +94,16 @@ function fmtMoney(n: number, ccy: string): string {
   return `${sign}${ccy} ${fmtNum(n)}`;
 }
 
+type LiveQuote = {
+  tradeId: string;
+  symbol: string;
+  price: number;
+  unrealizedPnl: number;
+  slProgress: number | null;
+  tpProgress: number | null;
+  fetchedAt: string;
+};
+
 // ──────────────────────────────────────────────────────────────────────
 // Component
 // ──────────────────────────────────────────────────────────────────────
@@ -145,6 +168,89 @@ export function JournalClient() {
   const updateFilter = <K extends keyof Filters>(key: K, value: Filters[K]) =>
     setFilters((s) => ({ ...s, [key]: value }));
 
+  // ─── Bitget read-only sync ──────────────────────────────────────────
+  const queryClient = useQueryClient();
+  const syncBitget = useMutation({
+    mutationFn: async () => {
+      const res = await fetch("/api/journal/sync-bitget", { method: "POST" });
+      const j = await res.json();
+      if (!res.ok) throw new Error(j?.error ?? "Đồng bộ thất bại");
+      return j as {
+        scanned: number;
+        changes: Array<{ before: string; after: string; note?: string }>;
+        errors: Array<{ message: string }>;
+      };
+    },
+    onSuccess: (data) => {
+      if (data.changes.length > 0) {
+        for (const c of data.changes) {
+          toast.success(
+            `Bitget: ${c.before} → ${c.after}${c.note ? ` · ${c.note}` : ""}`,
+            { duration: 6000 },
+          );
+        }
+        // Refresh journal list + stats since some entries may have moved
+        // from OPEN to CLOSED/CANCELED.
+        queryClient.invalidateQueries({ queryKey: ["journal"] });
+      }
+      if (data.errors.length > 0) {
+        toast.error(
+          `Đồng bộ có ${data.errors.length} lỗi: ${data.errors[0]!.message}`,
+        );
+      }
+    },
+    onError: (err) => {
+      // Silent for the auto-run on mount; only show when user explicitly
+      // clicked the button (handled below via onClick wrapping).
+      console.warn("sync-bitget error", err);
+    },
+  });
+
+  // Live quotes for OPEN trades — fills the empty exit-price and P/L slots
+  // with the current price and unrealized PnL. Polls every 30s while any
+  // OPEN trade is visible.
+  const hasOpenTrades = (list.data?.items ?? []).some(
+    (t) => t.status === "OPEN",
+  );
+  const liveQuotes = useQuery<{ quotes: LiveQuote[] }>({
+    queryKey: ["journal", "live-quotes"],
+    queryFn: async ({ signal }) => {
+      const res = await fetch("/api/journal/live-quotes", { signal });
+      if (!res.ok) throw new Error("live quotes failed");
+      return (await res.json()) as { quotes: LiveQuote[] };
+    },
+    enabled: hasOpenTrades,
+    refetchInterval: 30_000,
+    refetchIntervalInBackground: false,
+  });
+  const quoteByTradeId = React.useMemo(() => {
+    const m = new Map<string, LiveQuote>();
+    for (const q of liveQuotes.data?.quotes ?? []) m.set(q.tradeId, q);
+    return m;
+  }, [liveQuotes.data]);
+
+  // Run sync once on mount, then poll every 60s while the journal page is
+  // open — safe (read-only), and it means a fill/close/cancel that happens
+  // while the user sits on this page shows up without a manual refresh. The
+  // server rate-limits this to 6/min so the interval can never overrun it.
+  const didAutoSync = React.useRef(false);
+  // Mirror isPending into a ref so the interval closure (empty deps) reads
+  // the CURRENT value, not the stale first-render one.
+  const syncPendingRef = React.useRef(false);
+  syncPendingRef.current = syncBitget.isPending;
+  React.useEffect(() => {
+    if (!didAutoSync.current) {
+      didAutoSync.current = true;
+      syncBitget.mutate();
+    }
+    const interval = setInterval(() => {
+      if (syncPendingRef.current || document.hidden) return;
+      syncBitget.mutate();
+    }, 60_000);
+    return () => clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   return (
     <div className="space-y-6">
       <StatsBar data={stats.data} loading={stats.isLoading} />
@@ -155,16 +261,45 @@ export function JournalClient() {
             <Filter className="size-4 text-primary" />
             Bộ lọc
           </CardTitle>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => {
-              setFilters(INITIAL_FILTERS);
-              setDebouncedSymbol("");
-            }}
-          >
-            Đặt lại
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                syncBitget.mutate(undefined, {
+                  onSuccess: (data) => {
+                    if (data.changes.length === 0 && data.errors.length === 0) {
+                      toast.message("Không có thay đổi từ Bitget.");
+                    }
+                  },
+                  onError: (err) => {
+                    toast.error(
+                      err instanceof Error ? err.message : "Đồng bộ thất bại",
+                    );
+                  },
+                });
+              }}
+              disabled={syncBitget.isPending}
+              title="Kéo trạng thái mới nhất từ Bitget. Chỉ đọc, không đặt/huỷ lệnh."
+            >
+              {syncBitget.isPending ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                <RefreshCcw className="size-4" />
+              )}
+              Đồng bộ Bitget
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                setFilters(INITIAL_FILTERS);
+                setDebouncedSymbol("");
+              }}
+            >
+              Đặt lại
+            </Button>
+          </div>
         </CardHeader>
         <CardContent>
           <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
@@ -258,6 +393,7 @@ export function JournalClient() {
             error={list.error instanceof Error ? list.error.message : null}
             items={list.data?.items ?? []}
             currency={stats.data?.currency ?? "USD"}
+            quotes={quoteByTradeId}
           />
         </CardContent>
       </Card>
@@ -375,11 +511,13 @@ function TradeTable({
   error,
   items,
   currency,
+  quotes,
 }: {
   loading: boolean;
   error: string | null;
   items: SerializedTrade[];
   currency: string;
+  quotes: Map<string, LiveQuote>;
 }) {
   if (loading) {
     return (
@@ -429,7 +567,12 @@ function TradeTable({
       </TableHeader>
       <TableBody>
         {items.map((t) => (
-          <TradeRow key={t.id} trade={t} currency={currency} />
+          <TradeRow
+            key={t.id}
+            trade={t}
+            currency={currency}
+            quote={quotes.get(t.id) ?? null}
+          />
         ))}
       </TableBody>
     </Table>
@@ -439,13 +582,17 @@ function TradeTable({
 function TradeRow({
   trade,
   currency,
+  quote,
 }: {
   trade: SerializedTrade;
   currency: string;
+  quote: LiveQuote | null;
 }) {
   const opened = parseISO(trade.openedAt);
   const isLong = trade.direction === "LONG";
   const pnl = trade.pnl;
+  const isOpen = trade.status === "OPEN";
+  const live = isOpen ? quote : null;
 
   return (
     <TableRow>
@@ -477,9 +624,17 @@ function TradeRow({
       </TableCell>
       <TableCell className="num text-right text-sm">
         <div>{fmtNum(trade.entryPrice, 5)}</div>
-        <div className="text-xs text-muted-foreground">
-          {trade.exitPrice !== null ? fmtNum(trade.exitPrice, 5) : "—"}
-        </div>
+        {trade.exitPrice !== null ? (
+          <div className="text-xs text-muted-foreground">
+            {fmtNum(trade.exitPrice, 5)}
+          </div>
+        ) : live ? (
+          <div className="text-xs text-info" title="Giá hiện tại (live)">
+            ▸ {fmtNum(live.price, 5)}
+          </div>
+        ) : (
+          <div className="text-xs text-muted-foreground">—</div>
+        )}
       </TableCell>
       <TableCell className="num text-right text-sm">
         {fmtNum(trade.lotSize, trade.market === "FOREX" ? 2 : 4)}
@@ -491,9 +646,41 @@ function TradeRow({
           pnl !== null && pnl < 0 && "text-bearish",
         )}
       >
-        {pnl === null
-          ? "—"
-          : `${pnl > 0 ? "+" : ""}${fmtNum(pnl)}`}
+        {pnl !== null ? (
+          `${pnl > 0 ? "+" : ""}${fmtNum(pnl)}`
+        ) : live ? (
+          <div>
+            <div
+              className={cn(
+                live.unrealizedPnl > 0 && "text-bullish",
+                live.unrealizedPnl < 0 && "text-bearish",
+              )}
+              title="P/L tạm tính theo giá live"
+            >
+              ~{live.unrealizedPnl > 0 ? "+" : ""}
+              {fmtNum(live.unrealizedPnl)}
+            </div>
+            {live.slProgress !== null || live.tpProgress !== null ? (
+              <div className="text-[10px] font-normal text-muted-foreground">
+                {live.tpProgress !== null
+                  ? `TP ${Math.round(live.tpProgress * 100)}%`
+                  : null}
+                {live.tpProgress !== null && live.slProgress !== null
+                  ? " · "
+                  : null}
+                {live.slProgress !== null ? (
+                  <span
+                    className={cn(live.slProgress >= 0.7 && "text-bearish")}
+                  >
+                    SL {Math.round(live.slProgress * 100)}%
+                  </span>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
+        ) : (
+          "—"
+        )}
       </TableCell>
       <TableCell
         className={cn(

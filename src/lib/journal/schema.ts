@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { systemChecksArraySchema } from "@/lib/trading-systems/schema";
 
 export const MARKETS = [
   "FOREX",
@@ -76,6 +77,18 @@ const optionalCuid = z
   .optional()
   .or(z.literal("").transform(() => undefined));
 
+/**
+ * Like `optionalCuid` but accepts `null` to explicitly clear a foreign key
+ * (used by the trade form when the user picks "(Không dùng hệ thống)").
+ */
+const nullableCuid = z
+  .union([
+    z.string().trim().min(1).max(64),
+    z.null(),
+    z.literal("").transform(() => null),
+  ])
+  .optional();
+
 // Base shape without cross-field refinements so we can derive a partial schema
 // for PATCH (Zod 4 disallows .partial() on schemas with refinements).
 export const tradeUpsertBaseSchema = z.object({
@@ -112,6 +125,10 @@ export const tradeUpsertBaseSchema = z.object({
 
   strategyId: optionalCuid,
   accountId: optionalCuid,
+  tradingSystemId: nullableCuid,
+  /** Snapshot of the checklist state at trade creation. Pass `null` to
+   *  clear; omit to leave untouched. */
+  systemChecks: systemChecksArraySchema.nullable().optional(),
 
   setup: optionalString,
   notes: optionalString,
