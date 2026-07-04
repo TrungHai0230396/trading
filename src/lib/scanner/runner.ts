@@ -135,7 +135,7 @@ function toSummaryEntry(
   };
 }
 
-async function scanSymbol(args: {
+export async function scanSymbol(args: {
   runId: string;
   market: Market;
   symbol: string;
@@ -211,16 +211,20 @@ async function scanSymbol(args: {
 async function processBatch<T, R>(
   items: T[],
   size: number,
-  worker: (item: T) => Promise<R>,
+  worker: (item: T, index: number) => Promise<R>,
+  onItemDone?: (doneCount: number, total: number) => void,
 ): Promise<R[]> {
   if (items.length === 0) return [];
   const out: R[] = new Array(items.length);
   let cursor = 0;
+  let done = 0;
   async function next(): Promise<void> {
     while (true) {
       const idx = cursor++;
       if (idx >= items.length) return;
-      out[idx] = await worker(items[idx]);
+      out[idx] = await worker(items[idx], idx);
+      done++;
+      onItemDone?.(done, items.length);
     }
   }
   const workers = Array.from({ length: Math.min(size, items.length) }, () =>
@@ -228,6 +232,56 @@ async function processBatch<T, R>(
   );
   await Promise.all(workers);
   return out;
+}
+
+/**
+ * Progress reporter that the route can wire to a stream. Phases are kept
+ * coarse so the UI can show "Đang quét coin đã chọn 3/5" vs "Đang quét
+ * Top 10 đồng thuận 47/100".
+ */
+export type ScanProgress = {
+  phase: "USER_SYMBOLS" | "CONSENSUS";
+  done: number;
+  total: number;
+};
+export type ProgressCallback = (p: ScanProgress) => void;
+
+/**
+ * Compute a trend ranking across the consensus universe (top 100 USDT).
+ * Unlike `consensusTop`, this does NOT require unanimous TF agreement —
+ * it returns every symbol with its score, so the caller can pick the
+ * extremes (most bullish / most bearish) for "top trend" surfacing.
+ *
+ * The scanner runs in memory only (persist=false) — no DB rows are
+ * written, this is purely a read-only ranking endpoint.
+ */
+export async function getTopTrendSummary(opts: {
+  market: Market;
+  timeframes: Timeframe[];
+  onProgress?: ProgressCallback;
+}): Promise<ScanSummaryEntry[]> {
+  const universe = await getConsensusUniverse(opts.market);
+  const summary = await processBatch(
+    universe,
+    CONCURRENCY,
+    (symbol) =>
+      scanSymbol({
+        // runId is required by the type but only read when persist=true.
+        runId: "",
+        market: opts.market,
+        symbol,
+        timeframes: opts.timeframes,
+        indicators: ["ema-wma-on-rsi"],
+        limit: CONSENSUS_LIMIT,
+        persist: false,
+      }),
+    (done, total) =>
+      opts.onProgress?.({ phase: "CONSENSUS", done, total }),
+  );
+  // Highest score (most bullish) first, ties broken by symbol.
+  return summary.sort(
+    (a, b) => b.score - a.score || a.symbol.localeCompare(b.symbol),
+  );
 }
 
 export async function runScan(opts: {
@@ -239,6 +293,7 @@ export async function runScan(opts: {
   limitPerTF?: number;
   name?: string;
   includeConsensusTop?: boolean;
+  onProgress?: ProgressCallback;
 }): Promise<ScanResult> {
   const symbols = Array.from(
     new Set(opts.symbols.map((s) => s.trim().toUpperCase()).filter(Boolean)),
@@ -272,16 +327,21 @@ export async function runScan(opts: {
     },
   });
 
-  const summary = await processBatch(symbols, CONCURRENCY, (symbol) =>
-    scanSymbol({
-      runId: run.id,
-      market: opts.market,
-      symbol,
-      timeframes,
-      indicators,
-      limit,
-      persist: true,
-    }),
+  const summary = await processBatch(
+    symbols,
+    CONCURRENCY,
+    (symbol) =>
+      scanSymbol({
+        runId: run.id,
+        market: opts.market,
+        symbol,
+        timeframes,
+        indicators,
+        limit,
+        persist: true,
+      }),
+    (done, total) =>
+      opts.onProgress?.({ phase: "USER_SYMBOLS", done, total }),
   );
 
   // Sort: highest score first; ties broken by symbol for stability.
@@ -305,6 +365,8 @@ export async function runScan(opts: {
           limit: CONSENSUS_LIMIT,
           persist: false,
         }),
+      (done, total) =>
+        opts.onProgress?.({ phase: "CONSENSUS", done, total }),
     );
 
     const bullish = consensusSummary
@@ -327,6 +389,27 @@ export async function runScan(opts: {
       bullish,
       bearish,
     };
+
+    // Persist ONLY the top-10 winners — lightweight: one row per coin
+    // (not per-TF). Total ≤ 20 rows per consensus run.
+    //
+    // We use `timeframe = "CONSENSUS"` as a marker so the run-detail UI
+    // can separate these from per-TF rows of user-picked symbols. The
+    // `indicators` field just stores which TFs were checked, no raw
+    // EMA/WMA numbers — keeps the row small.
+    const winners: ConsensusTopEntry[] = [...bullish, ...bearish];
+    if (winners.length > 0) {
+      await db.analysisResult.createMany({
+        data: winners.map((entry) => ({
+          runId: run.id,
+          symbol: entry.symbol,
+          timeframe: "CONSENSUS",
+          signal: entry.alignment, // BULLISH | BEARISH
+          score: entry.score,
+          indicators: { tfs: timeframes } as unknown as object,
+        })),
+      });
+    }
   }
 
   return {

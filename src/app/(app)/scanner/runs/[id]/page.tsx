@@ -73,6 +73,12 @@ export default async function RunDetailPage({
   const timeframes = (run.timeframes as unknown as string[]) ?? [];
   const indicators = (run.indicators as unknown as StrategyId[]) ?? [];
 
+  // Consensus rows are persisted with timeframe = "CONSENSUS" (one row
+  // per top-10 winner). Separate them from per-TF rows so the existing
+  // per-TF table stays clean.
+  type ConsensusRow = { symbol: string; signal: SignalLike; score: number };
+  const consensusRows: ConsensusRow[] = [];
+
   // Aggregate per symbol → score & alignment.
   type Row = {
     symbol: string;
@@ -91,6 +97,14 @@ export default async function RunDetailPage({
   }
 
   for (const r of run.results) {
+    if (r.timeframe === "CONSENSUS") {
+      consensusRows.push({
+        symbol: r.symbol,
+        signal: r.signal as SignalLike,
+        score: r.score ?? 50,
+      });
+      continue;
+    }
     let row = rowsBySymbol.get(r.symbol);
     if (!row) {
       row = { symbol: r.symbol, score: 50, alignment: "MIXED", perTF: new Map() };
@@ -115,6 +129,13 @@ export default async function RunDetailPage({
       error,
     });
   }
+
+  const consensusBull = consensusRows
+    .filter((r) => r.signal === "BULLISH")
+    .sort((a, b) => b.score - a.score);
+  const consensusBear = consensusRows
+    .filter((r) => r.signal === "BEARISH")
+    .sort((a, b) => a.score - b.score);
 
   // compute score per symbol from TF signals (matching runner)
   const summary = [...rowsBySymbol.values()].map((row) => {
@@ -169,6 +190,35 @@ export default async function RunDetailPage({
       </div>
 
       <div className="grid gap-4">
+        {consensusRows.length > 0 ? (
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">
+                Top 10 đồng thuận
+              </CardTitle>
+              <CardDescription>
+                {consensusBull.length} bullish · {consensusBear.length} bearish
+                · TF kiểm tra: {timeframes.join(", ")}
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="grid gap-4 lg:grid-cols-2">
+                <ConsensusList
+                  title="Bullish"
+                  rows={consensusBull}
+                  empty="(không có coin bull đồng thuận)"
+                />
+                <ConsensusList
+                  title="Bearish"
+                  rows={consensusBear}
+                  empty="(không có coin bear đồng thuận)"
+                />
+              </div>
+            </CardContent>
+          </Card>
+        ) : null}
+
+        {summary.length === 0 ? null : (
         <Card>
           <CardHeader>
             <CardTitle className="text-base">Tổng hợp</CardTitle>
@@ -239,7 +289,9 @@ export default async function RunDetailPage({
             </Table>
           </CardContent>
         </Card>
+        )}
 
+        {summary.length === 0 ? null : (
         <Card>
           <CardHeader>
             <CardTitle className="text-base">Chi tiết chỉ báo</CardTitle>
@@ -308,7 +360,59 @@ export default async function RunDetailPage({
             </Table>
           </CardContent>
         </Card>
+        )}
+
+        {summary.length === 0 && consensusRows.length === 0 ? (
+          <Card>
+            <CardContent className="p-6 text-center text-sm text-muted-foreground">
+              Phiên quét này không có kết quả nào được lưu.
+            </CardContent>
+          </Card>
+        ) : null}
       </div>
+    </div>
+  );
+}
+
+function ConsensusList({
+  title,
+  rows,
+  empty,
+}: {
+  title: string;
+  rows: { symbol: string; signal: SignalLike; score: number }[];
+  empty: string;
+}) {
+  return (
+    <div className="space-y-2">
+      <h3 className="text-sm font-medium">{title}</h3>
+      {rows.length === 0 ? (
+        <div className="rounded-md border border-dashed p-3 text-center text-xs text-muted-foreground">
+          {empty}
+        </div>
+      ) : (
+        <ol className="space-y-1.5">
+          {rows.map((r, idx) => (
+            <li
+              key={r.symbol}
+              className="flex items-center justify-between rounded-md border bg-card/40 px-3 py-1.5"
+            >
+              <span className="flex items-center gap-2">
+                <span className="w-5 text-right font-mono text-xs text-muted-foreground">
+                  {idx + 1}.
+                </span>
+                <span className="font-mono text-sm">{r.symbol}</span>
+              </span>
+              <span className="flex items-center gap-2">
+                <span className="num text-xs tabular-nums text-muted-foreground">
+                  {r.score.toFixed(1)}
+                </span>
+                <SignalPill signal={r.signal} compact />
+              </span>
+            </li>
+          ))}
+        </ol>
+      )}
     </div>
   );
 }

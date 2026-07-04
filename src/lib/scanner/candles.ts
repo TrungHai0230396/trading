@@ -4,8 +4,8 @@
  *  - CRYPTO  → Binance public REST (no API key)
  *  - FOREX   → Twelve Data (needs TWELVE_DATA_API_KEY)
  *
- * We cache via fetch's Next.js `revalidate` so repeated scans within a
- * minute reuse the same upstream response.
+ * We DO NOT cache. Next.js stale-while-revalidate would otherwise serve
+ * days-old candles after an idle period — see comment in getBinanceCloses.
  *
  * Timeframe convention follows Binance: lowercase `m` is minutes, lowercase
  * `h`/`d`/`w` are hours/days/weeks, capital `M` is months (so "15m" ≠ "1M").
@@ -91,7 +91,13 @@ async function getBinanceCloses(
   url.searchParams.set("interval", interval);
   url.searchParams.set("limit", String(limit));
 
-  const res = await fetch(url, { next: { revalidate: 60 } });
+  // Disable Next.js fetch cache entirely. We had `revalidate: 60` before,
+  // but Next prod uses stale-while-revalidate: the first request after a
+  // long idle gap returns *stale* data (from .next/cache/fetch-cache on
+  // disk, potentially days old) while triggering a background refetch.
+  // For market data that flips bull/bear hour to hour, that's a fatal UX
+  // bug — user sees yesterday's bull list and thinks it's live.
+  const res = await fetch(url, { cache: "no-store" });
   if (!res.ok) {
     if (res.status === 400) {
       throw new CandleFetchError(
@@ -187,7 +193,7 @@ async function fetchTwelveDataCloses(
   url.searchParams.set("outputsize", String(limit));
   url.searchParams.set("apikey", twelveDataKey());
 
-  const res = await fetch(url, { next: { revalidate: 60 } });
+  const res = await fetch(url, { cache: "no-store" });
   if (!res.ok) {
     throw new CandleFetchError(
       `Twelve Data lỗi HTTP ${res.status} khi tải ${tdSym} ${interval}.`,

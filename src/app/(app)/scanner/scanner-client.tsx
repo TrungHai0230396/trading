@@ -1,9 +1,10 @@
 "use client";
 
 import * as React from "react";
+import Link from "next/link";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { ExternalLink, Eye, EyeOff, Radar, Plus, X } from "lucide-react";
+import { ExternalLink, Eye, EyeOff, Radar, Plus, Sparkles, X } from "lucide-react";
 import {
   LineChart,
   Line,
@@ -52,15 +53,32 @@ import type {
   ScanSummaryEntry,
 } from "@/lib/scanner/runner";
 import { SignalPill, ScoreBar, type SignalLike } from "./signal-pill";
+import {
+  tradingViewSymbol,
+  tradingViewInterval,
+  tradingViewUrl,
+} from "@/lib/scanner/tradingview";
+import { cn } from "@/lib/utils";
 
 type Market = "FOREX" | "CRYPTO";
 
 const DEFAULT_FOREX = ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD"];
 const DEFAULT_CRYPTO = ["BTCUSDT", "ETHUSDT", "SOLUSDT"];
 const TIMEFRAMES_STORAGE_KEY = "scanner:selected-timeframes";
-const LAST_RESULT_STORAGE_KEY = "scanner:last-result";
 const CHART_HEIGHT_STORAGE_KEY = "scanner:chart-height";
 const RSI_HEIGHT_STORAGE_KEY = "scanner:rsi-height";
+
+// Session-scoped scan cache: survives back-navigation from the analysis
+// page but NOT page refresh / new tab (intentional — refresh = fresh data).
+// TTL keeps it harmless if the user comes back hours later.
+const SESSION_SCAN_KEY = "scanner:session-scan";
+const SESSION_SCAN_TTL_MS = 15 * 60_000; // 15 min
+
+// Legacy key we used to persist the entire scan result (including top 10
+// đồng thuận). Removed because users couldn't tell the result was stale —
+// 5-hour-old top 10 looked identical to a fresh scan. We now clean it
+// up on mount so leftover snapshots don't get re-read by older code.
+const LEGACY_RESULT_STORAGE_KEY = "scanner:last-result";
 const DEFAULT_CHART_HEIGHT = 1000;
 const MIN_CHART_HEIGHT = 360;
 const MAX_CHART_HEIGHT = 1800;
@@ -80,13 +98,6 @@ type ChartSelection = {
   symbol: string;
   market: Market;
   timeframe: Timeframe;
-};
-
-type StoredScannerSnapshot = {
-  state: FormState;
-  result: ScanResult;
-  chartSelection: ChartSelection | null;
-  savedAt: string;
 };
 
 const initialState = (): FormState => ({
@@ -113,42 +124,6 @@ function parseStoredTimeframes(value: string | null): Timeframe[] | null {
   }
 }
 
-function parseStoredScannerSnapshot(
-  value: string | null,
-): StoredScannerSnapshot | null {
-  if (!value) return null;
-
-  try {
-    const parsed = JSON.parse(value) as Partial<StoredScannerSnapshot>;
-    if (!parsed.state || !parsed.result) return null;
-    if (parsed.state.market !== "FOREX" && parsed.state.market !== "CRYPTO") {
-      return null;
-    }
-    if (!Array.isArray(parsed.state.symbols) || !parsed.state.symbols.length) {
-      return null;
-    }
-
-    const timeframes = parsed.state.timeframes.filter((item): item is Timeframe =>
-      (ALL_TIMEFRAMES as readonly string[]).includes(item),
-    );
-    if (!timeframes.length) return null;
-
-    return {
-      state: {
-        market: parsed.state.market,
-        symbols: parsed.state.symbols,
-        timeframes,
-        limitPerTF: parsed.state.limitPerTF || "200",
-      },
-      result: parsed.result,
-      chartSelection: parsed.chartSelection ?? null,
-      savedAt: parsed.savedAt ?? new Date().toISOString(),
-    };
-  } catch {
-    return null;
-  }
-}
-
 function normalizeChartSelection(selection: ChartSelection): ChartSelection {
   return selection.timeframe === "3d"
     ? { ...selection, timeframe: DEFAULT_CHART_TIMEFRAME }
@@ -160,7 +135,13 @@ export function ScannerClient() {
   const [pickerSymbol, setPickerSymbol] = React.useState("");
   const [customSymbol, setCustomSymbol] = React.useState("");
   const [result, setResult] = React.useState<ScanResult | null>(null);
+  const [resultSavedAt, setResultSavedAt] = React.useState<number | null>(null);
   const [errorMessage, setErrorMessage] = React.useState<string | null>(null);
+  const [progress, setProgress] = React.useState<{
+    phase: "USER_SYMBOLS" | "CONSENSUS";
+    done: number;
+    total: number;
+  } | null>(null);
   const [chartSelection, setChartSelection] =
     React.useState<ChartSelection | null>(null);
   const [chartVisible, setChartVisible] = React.useState(true);
@@ -170,12 +151,13 @@ export function ScannerClient() {
 
   React.useEffect(() => {
     const timer = window.setTimeout(() => {
+      // Restore UI preferences only — NOT the scan result. Scan results
+      // go stale fast (live bar moves; top 10 đồng thuận can flip within
+      // an hour) and we have no good way to surface "this is N hours
+      // old" without misleading the user. So every page load starts
+      // with an empty results panel; user re-scans to see fresh data.
       const stored = parseStoredTimeframes(
         window.localStorage.getItem(TIMEFRAMES_STORAGE_KEY),
-      );
-
-      const snapshot = parseStoredScannerSnapshot(
-        window.localStorage.getItem(LAST_RESULT_STORAGE_KEY),
       );
 
       const storedChartHeight = Number(
@@ -200,27 +182,39 @@ export function ScannerClient() {
         setRsiHeight(storedRsiHeight);
       }
 
-      if (snapshot) {
-        setState(snapshot.state);
-        setResult(snapshot.result);
-        const snapshotSelection = snapshot.chartSelection ??
-          (snapshot.result.summary[0]
-            ? {
-                symbol: snapshot.result.summary[0].symbol,
-                market: snapshot.state.market,
-                timeframe: snapshot.state.timeframes[0] ?? "1h",
-              }
-            : null);
-
-        setChartSelection(
-          snapshotSelection ? normalizeChartSelection(snapshotSelection) : null,
-        );
-      } else if (stored) {
+      if (stored) {
         setState((prev) =>
           prev.timeframes.join("|") === stored.join("|")
             ? prev
             : { ...prev, timeframes: stored },
         );
+      }
+
+      // One-time cleanup of the legacy result snapshot key.
+      window.localStorage.removeItem(LEGACY_RESULT_STORAGE_KEY);
+
+      // Restore last scan from sessionStorage if still fresh — purpose
+      // is to survive back-navigation from /scanner/analysis/... without
+      // losing the user's work. Falls out automatically on tab close.
+      try {
+        const raw = window.sessionStorage.getItem(SESSION_SCAN_KEY);
+        if (raw) {
+          const parsed = JSON.parse(raw) as {
+            result: ScanResult;
+            state: FormState;
+            savedAt: number;
+          } | null;
+          const age = parsed ? Date.now() - parsed.savedAt : Infinity;
+          if (parsed && age < SESSION_SCAN_TTL_MS) {
+            setResult(parsed.result);
+            setResultSavedAt(parsed.savedAt);
+            if (parsed.state) setState(parsed.state);
+          } else {
+            window.sessionStorage.removeItem(SESSION_SCAN_KEY);
+          }
+        }
+      } catch {
+        window.sessionStorage.removeItem(SESSION_SCAN_KEY);
       }
 
       setHydrated(true);
@@ -244,23 +238,7 @@ export function ScannerClient() {
   }, [hydrated, rsiHeight]);
 
   const selectChart = React.useCallback((selection: ChartSelection) => {
-    const normalized = normalizeChartSelection(selection);
-
-    setChartSelection(normalized);
-
-    const snapshot = parseStoredScannerSnapshot(
-      window.localStorage.getItem(LAST_RESULT_STORAGE_KEY),
-    );
-    if (snapshot) {
-      window.localStorage.setItem(
-        LAST_RESULT_STORAGE_KEY,
-        JSON.stringify({
-          ...snapshot,
-          chartSelection: normalized,
-          savedAt: new Date().toISOString(),
-        } satisfies StoredScannerSnapshot),
-      );
-    }
+    setChartSelection(normalizeChartSelection(selection));
   }, []);
 
   const onMarketChange = (m: string | null) => {
@@ -320,40 +298,109 @@ export function ScannerClient() {
           includeConsensusTop,
         }),
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "Quét thất bại");
-      return data as ScanResult;
+      if (!res.ok || !res.body) {
+        const err = await res.json().catch(() => null);
+        throw new Error(err?.error ?? `HTTP ${res.status}`);
+      }
+
+      // The server streams NDJSON: one `progress` line per chunk, then a
+      // single terminal `result` or `error` line. We read incrementally
+      // and update progress state as events come in.
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let final: ScanResult | null = null;
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (value) buffer += decoder.decode(value, { stream: true });
+        // Process every complete line we have so far.
+        let nl: number;
+        while ((nl = buffer.indexOf("\n")) !== -1) {
+          const line = buffer.slice(0, nl).trim();
+          buffer = buffer.slice(nl + 1);
+          if (!line) continue;
+          let event: unknown;
+          try {
+            event = JSON.parse(line);
+          } catch {
+            continue;
+          }
+          if (!event || typeof event !== "object" || !("type" in event)) {
+            continue;
+          }
+          const e = event as Record<string, unknown>;
+          if (e.type === "progress") {
+            const phase = e.phase === "CONSENSUS" ? "CONSENSUS" : "USER_SYMBOLS";
+            const done = typeof e.done === "number" ? e.done : 0;
+            const total = typeof e.total === "number" ? e.total : 0;
+            setProgress({ phase, done, total });
+          } else if (e.type === "result") {
+            final = e.data as ScanResult;
+          } else if (e.type === "error") {
+            throw new Error(
+              typeof e.error === "string" ? e.error : "Quét thất bại",
+            );
+          }
+        }
+        if (done) break;
+      }
+
+      if (!final) throw new Error("Stream kết thúc nhưng chưa có kết quả.");
+      return final;
+    },
+    onMutate: ({ includeConsensusTop }) => {
+      // Stale-cache fix: a previous scan (or a snapshot restored from
+      // localStorage on mount) may have left consensusTop / summary on
+      // screen. Wipe those parts of the result *before* the new request
+      // returns so the user doesn't think the old coins are the fresh
+      // result while we're still fetching.
+      //
+      // - "Quét đa khung" (!includeConsensusTop): summary will be replaced
+      //   by the new scan; consensusTop won't be touched by the API.
+      //   Clear both so we render the loading state cleanly.
+      // - "Quét Top 10" (includeConsensusTop): summary will come back
+      //   empty (no symbols sent); consensusTop will be overwritten.
+      //   Clear consensusTop now to hide the stale list.
+      setResult((prev) => {
+        if (!prev) return prev;
+        if (includeConsensusTop) {
+          return { ...prev, consensusTop: undefined };
+        }
+        return { ...prev, summary: [], consensusTop: undefined };
+      });
+      setErrorMessage(null);
+      setProgress(null);
     },
     onSuccess: (data) => {
       setResult(data);
       setErrorMessage(null);
-      setChartSelection((prev) => {
-        const nextSelection =
-          prev && data.summary.some((row) => row.symbol === prev.symbol)
-            ? prev
-            : data.summary[0]
-              ? {
-                  symbol: data.summary[0].symbol,
-                  market: state.market,
-                  timeframe: ALL_TIMEFRAMES.includes(
-                    state.timeframes[0] ?? "1h",
-                  )
-                    ? (state.timeframes[0] ?? "1h")
-                    : DEFAULT_CHART_TIMEFRAME,
-                }
-              : null;
-
-        window.localStorage.setItem(
-          LAST_RESULT_STORAGE_KEY,
-          JSON.stringify({
-            state,
-            result: data,
-            chartSelection: nextSelection,
-            savedAt: new Date().toISOString(),
-          } satisfies StoredScannerSnapshot),
+      setProgress(null);
+      // Stash to sessionStorage so back-navigation from the analysis
+      // page restores instead of starting empty. Refresh / new tab still
+      // clears (sessionStorage is per-tab).
+      const savedAt = Date.now();
+      setResultSavedAt(savedAt);
+      try {
+        window.sessionStorage.setItem(
+          SESSION_SCAN_KEY,
+          JSON.stringify({ result: data, state, savedAt }),
         );
-
-        return nextSelection;
+      } catch {
+        // sessionStorage may be full or disabled — silently skip.
+      }
+      setChartSelection((prev) => {
+        if (prev && data.summary.some((row) => row.symbol === prev.symbol)) {
+          return prev;
+        }
+        if (!data.summary[0]) return null;
+        return {
+          symbol: data.summary[0].symbol,
+          market: state.market,
+          timeframe: ALL_TIMEFRAMES.includes(state.timeframes[0] ?? "1h")
+            ? (state.timeframes[0] ?? "1h")
+            : DEFAULT_CHART_TIMEFRAME,
+        };
       });
       toast.success(
         data.consensusTop
@@ -364,6 +411,7 @@ export function ScannerClient() {
     onError: (err) => {
       const message = err instanceof Error ? err.message : "Lỗi không xác định";
       setErrorMessage(message);
+      setProgress(null);
       toast.error(message);
     },
   });
@@ -578,21 +626,29 @@ export function ScannerClient() {
         </CardContent>
       </Card>
 
-      <ResultsPanel
-        result={result}
-        market={state.market}
-        timeframes={state.timeframes}
-        loading={runScan.isPending}
-        chartSelection={chartSelection}
-        chartVisible={chartVisible}
-        chartHeight={chartHeight}
-        rsiHeight={rsiHeight}
-        limitPerTF={Number(state.limitPerTF) || 200}
-        onRsiHeightChange={setRsiHeight}
-        onToggleChart={() => setChartVisible((visible) => !visible)}
-        onChartHeightChange={setChartHeight}
-        onSelectChart={selectChart}
-      />
+      <div className="space-y-3">
+        <StaleResultBanner
+          savedAt={resultSavedAt}
+          loading={runScan.isPending}
+          hasResult={!!result}
+        />
+        <ResultsPanel
+          result={result}
+          market={state.market}
+          timeframes={state.timeframes}
+          loading={runScan.isPending}
+          progress={progress}
+          chartSelection={chartSelection}
+          chartVisible={chartVisible}
+          chartHeight={chartHeight}
+          rsiHeight={rsiHeight}
+          limitPerTF={Number(state.limitPerTF) || 200}
+          onRsiHeightChange={setRsiHeight}
+          onToggleChart={() => setChartVisible((visible) => !visible)}
+          onChartHeightChange={setChartHeight}
+          onSelectChart={selectChart}
+        />
+      </div>
     </div>
   );
 }
@@ -602,6 +658,7 @@ function ResultsPanel({
   market,
   timeframes,
   loading,
+  progress,
   chartSelection,
   chartVisible,
   chartHeight,
@@ -616,6 +673,11 @@ function ResultsPanel({
   market: Market;
   timeframes: Timeframe[];
   loading: boolean;
+  progress: {
+    phase: "USER_SYMBOLS" | "CONSENSUS";
+    done: number;
+    total: number;
+  } | null;
   chartSelection: ChartSelection | null;
   chartVisible: boolean;
   chartHeight: number;
@@ -626,15 +688,48 @@ function ResultsPanel({
   onChartHeightChange: (height: number) => void;
   onSelectChart: (selection: ChartSelection) => void;
 }) {
-  if (loading && !result) {
+  // Show the loading card whenever a scan is in flight. We used to only
+  // do this when there was no prior result, but that left stale rows
+  // (and especially stale consensusTop) on screen during a fresh scan —
+  // looked like the data was cached. We clear those parts in onMutate;
+  // showing the loading card here makes the "wait" state explicit.
+  if (loading) {
+    const pct = progress && progress.total > 0
+      ? Math.round((progress.done / progress.total) * 100)
+      : null;
+    const phaseLabel = progress
+      ? progress.phase === "CONSENSUS"
+        ? "Top 10 đồng thuận"
+        : "Coin đã chọn"
+      : null;
     return (
       <Card className="bg-card/50">
         <CardHeader>
           <CardTitle className="text-base">Kết quả</CardTitle>
-          <CardDescription>Đang quét, vui lòng chờ…</CardDescription>
+          <CardDescription>
+            {progress
+              ? `Đang quét ${phaseLabel}… ${progress.done}/${progress.total}`
+              : "Đang chuẩn bị quét…"}
+          </CardDescription>
         </CardHeader>
-        <CardContent>
-          <div className="grid h-72 place-items-center rounded-md border border-dashed text-sm text-muted-foreground">
+        <CardContent className="space-y-4">
+          {progress ? (
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between text-xs text-muted-foreground">
+                <span>{phaseLabel}</span>
+                <span className="num tabular-nums font-medium text-foreground">
+                  {pct}%
+                </span>
+              </div>
+              <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
+                <div
+                  className="h-full bg-primary transition-[width] duration-200 ease-out"
+                  style={{ width: `${pct ?? 0}%` }}
+                />
+              </div>
+            </div>
+          ) : null}
+          <div className="grid h-60 place-items-center rounded-md border border-dashed text-sm text-muted-foreground">
             Đang tải nến và chấm điểm…
           </div>
         </CardContent>
@@ -847,18 +942,38 @@ function ConsensusTopRow({
   onSelectChart: (selection: ChartSelection) => void;
 }) {
   const chartUrl = tradingViewUrl({ symbol: row.symbol, market, timeframe });
+  const analysisHref = `/scanner/analysis/${market.toLowerCase()}/${row.symbol}`;
 
   return (
-    <div className="flex w-full items-center gap-2 rounded-md border bg-background/60 px-2.5 py-2">
-      <button
-        type="button"
-        className="flex flex-1 items-center gap-2 text-left transition-colors hover:text-foreground"
-        onClick={() => onSelectChart({ symbol: row.symbol, market, timeframe })}
+    <div className="group flex w-full items-center gap-2 rounded-md border bg-background/60 px-2.5 py-2 transition-colors hover:border-primary/40 hover:bg-primary/5">
+      {/* Primary tap target: deep-analysis page. Styled to look obviously
+          clickable — primary-color symbol, sparkles icon hint, hover row. */}
+      <Link
+        href={analysisHref}
+        className="flex flex-1 items-center gap-2 text-left"
+        prefetch={false}
+        title={`Mở phân tích AI cho ${row.symbol}`}
       >
         <span className="num w-5 text-xs tabular-nums text-muted-foreground">
           #{index + 1}
         </span>
-        <span className="font-mono text-sm font-medium">{row.symbol}</span>
+        <span className="font-mono text-sm font-medium text-foreground underline decoration-primary/40 decoration-dotted underline-offset-4 group-hover:text-primary group-hover:decoration-primary">
+          {row.symbol}
+        </span>
+        <Sparkles className="size-3 text-primary opacity-50 transition-opacity group-hover:opacity-100" />
+        <span className="hidden text-[10px] uppercase tracking-wide text-primary opacity-0 transition-opacity group-hover:opacity-100 sm:inline">
+          Phân tích AI
+        </span>
+      </Link>
+      {/* Secondary: inline chart preview. */}
+      <button
+        type="button"
+        className="inline-flex items-center rounded-md border p-1.5 text-muted-foreground transition-colors hover:text-foreground"
+        onClick={() => onSelectChart({ symbol: row.symbol, market, timeframe })}
+        aria-label={`Xem chart ${row.symbol} bên dưới`}
+        title="Hiển thị chart phía dưới"
+      >
+        <LineChart className="size-3" />
       </button>
       <a
         href={chartUrl}
@@ -866,7 +981,8 @@ function ConsensusTopRow({
         rel="noreferrer"
         className="inline-flex items-center rounded-md border p-1.5 text-muted-foreground transition-colors hover:text-foreground"
         onClick={(event) => event.stopPropagation()}
-        aria-label={`Mở chart ${row.symbol}`}
+        aria-label={`Mở ${row.symbol} trên TradingView`}
+        title="Mở TradingView (tab mới)"
       >
         <ExternalLink className="size-3" />
       </a>
@@ -874,27 +990,8 @@ function ConsensusTopRow({
   );
 }
 
-function tradingViewSymbol(selection: ChartSelection): string {
-  const raw = selection.symbol.toUpperCase().replace("/", "");
-  if (raw.includes(":")) return raw;
-  if (selection.market === "CRYPTO") return `BINANCE:${raw}`;
-  return `OANDA:${raw}`;
-}
-
-function tradingViewInterval(timeframe: Timeframe): string {
-  if (timeframe === "15m") return "15";
-  if (timeframe === "1h") return "60";
-  if (timeframe === "4h") return "240";
-  if (timeframe === "1d") return "D";
-  if (timeframe === "3d") return "3D";
-  if (timeframe === "1w") return "W";
-  return "M";
-}
-
-function tradingViewUrl(selection: ChartSelection): string {
-  const symbol = encodeURIComponent(tradingViewSymbol(selection));
-  return `https://www.tradingview.com/chart/?symbol=${symbol}&interval=${tradingViewInterval(selection.timeframe)}`;
-}
+// TradingView URL builders moved to `lib/scanner/tradingview.ts` so the
+// analysis detail page can reuse them. Re-imported above.
 
 type RsiPoint = {
   index: number;
@@ -1359,4 +1456,57 @@ function SummaryRow({
     </TableRow>
   );
 }
+
+// ──────────────────────────────────────────────────────────────────────
+// Stale-result banner — shows when result was restored from sessionStorage
+// after navigating back from the analysis page. Makes "this is N min old"
+// loud so the user doesn't act on stale data thinking it's fresh.
+// ──────────────────────────────────────────────────────────────────────
+function StaleResultBanner({
+  savedAt,
+  loading,
+  hasResult,
+}: {
+  savedAt: number | null;
+  loading: boolean;
+  hasResult: boolean;
+}) {
+  const [nowMs, setNowMs] = React.useState<number | null>(null);
+
+  // Tick the clock every 30s so the "X phút trước" stays roughly right
+  // without spamming re-renders.
+  React.useEffect(() => {
+    setNowMs(Date.now());
+    const id = window.setInterval(() => setNowMs(Date.now()), 30_000);
+    return () => window.clearInterval(id);
+  }, []);
+
+  if (!hasResult || !savedAt || loading || nowMs === null) return null;
+  const ageMs = nowMs - savedAt;
+  // Don't bother with a banner for fresh results — likely still on the
+  // same render after Quét.
+  if (ageMs < 30_000) return null;
+
+  const min = Math.floor(ageMs / 60_000);
+  const label =
+    min < 1 ? "vừa xong" : min < 60 ? `${min} phút trước` : `${Math.floor(min / 60)} giờ trước`;
+  const isOld = min >= 5;
+
+  return (
+    <div
+      className={cn(
+        "flex items-center justify-between gap-2 rounded-md border px-3 py-2 text-xs",
+        isOld
+          ? "border-warning/40 bg-warning/10 text-warning"
+          : "border-border bg-muted/40 text-muted-foreground",
+      )}
+    >
+      <span>
+        Kết quả từ <span className="font-medium">{label}</span>. Bấm Quét để
+        cập nhật.
+      </span>
+    </div>
+  );
+}
+
 

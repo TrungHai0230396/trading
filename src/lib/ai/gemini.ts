@@ -143,6 +143,27 @@ export function isModelNotFoundError(err: unknown): boolean {
   );
 }
 
+/**
+ * Transient overload / rate-limit. Google returns 503 UNAVAILABLE when
+ * the model is hot, 429 when we're throttled. Both are worth retrying
+ * on the FALLBACK model (different infra pool) before giving up.
+ */
+export function isTransientGeminiError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message.toLowerCase() : "";
+  return (
+    msg.includes("503") ||
+    msg.includes("unavailable") ||
+    msg.includes("overloaded") ||
+    msg.includes("429") ||
+    msg.includes("too many requests") ||
+    msg.includes("rate limit") ||
+    msg.includes("high demand")
+  );
+}
+
+const sleepMs = (ms: number) =>
+  new Promise<void>((resolve) => setTimeout(resolve, ms));
+
 async function callGemini(
   modelId: string,
   prompt: string,
@@ -185,14 +206,46 @@ export async function callGeminiJson(opts: {
     return result.response.text();
   };
 
+  // Retry strategy:
+  // 1. Primary model
+  // 2. On model-not-found OR transient (503/429): try fallback model
+  // 3. On transient fallback failure: brief sleep + retry primary once
+  //
+  // The 503 case is the common one — gemini-2.5-flash gets overloaded;
+  // gemini-2.0-flash is usually on a different pool and answers fine.
   let modelId = PRIMARY_MODEL;
   let raw: string;
   try {
     raw = await callOnce(PRIMARY_MODEL);
   } catch (err) {
-    if (isModelNotFoundError(err)) {
-      modelId = FALLBACK_MODEL;
-      raw = await callOnce(FALLBACK_MODEL);
+    if (isModelNotFoundError(err) || isTransientGeminiError(err)) {
+      try {
+        modelId = FALLBACK_MODEL;
+        raw = await callOnce(FALLBACK_MODEL);
+      } catch (err2) {
+        if (isTransientGeminiError(err2)) {
+          // Both pools hot. Wait briefly and try primary one more time.
+          await sleepMs(1500);
+          modelId = PRIMARY_MODEL;
+          try {
+            raw = await callOnce(PRIMARY_MODEL);
+          } catch (err3) {
+            throw err3 instanceof GeminiError
+              ? err3
+              : new GeminiError(
+                  err3 instanceof Error
+                    ? `Gemini quá tải (đã thử cả 2 model + retry): ${err3.message}`
+                    : "Gemini quá tải",
+                );
+          }
+        } else {
+          throw err2 instanceof GeminiError
+            ? err2
+            : new GeminiError(
+                err2 instanceof Error ? err2.message : "Gemini lỗi không xác định",
+              );
+        }
+      }
     } else {
       throw err instanceof GeminiError
         ? err

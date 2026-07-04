@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { auth } from "@/lib/auth";
 import { db } from "@/lib/db";
-import { runScan } from "@/lib/scanner/runner";
+import { runScan, type ScanProgress } from "@/lib/scanner/runner";
 import { ALL_TIMEFRAMES } from "@/lib/scanner/candles";
 import { DEFAULT_STRATEGY } from "@/lib/scanner/strategies";
 
@@ -49,17 +49,77 @@ export async function POST(req: Request) {
     );
   }
 
-  try {
-    const result = await runScan({
-      userId: session.user.id,
-      ...parsed.data,
-      indicators: [DEFAULT_STRATEGY],
-    });
-    return NextResponse.json(result);
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : "Lỗi không xác định";
-    return NextResponse.json({ error: msg }, { status: 502 });
-  }
+  // Stream progress + result as NDJSON. Each line is a separate JSON
+  // object the client can parse incrementally:
+  //   {"type":"progress","phase":"CONSENSUS","done":47,"total":100}
+  //   {"type":"result","data":{...}}
+  //   {"type":"error","error":"..."}
+  const userId = session.user.id;
+  const input = parsed.data;
+  const encoder = new TextEncoder();
+
+  const stream = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      let closed = false;
+      const send = (obj: unknown) => {
+        if (closed) return;
+        controller.enqueue(encoder.encode(JSON.stringify(obj) + "\n"));
+      };
+
+      // Emit an initial event immediately so the client knows the
+      // stream is alive and starts showing the progress UI before any
+      // symbol finishes. The total is set as soon as runScan picks it.
+      const initialTotal =
+        input.includeConsensusTop ? 100 : input.symbols.length;
+      const initialPhase: ScanProgress["phase"] =
+        input.includeConsensusTop ? "CONSENSUS" : "USER_SYMBOLS";
+      send({
+        type: "progress",
+        phase: initialPhase,
+        done: 0,
+        total: initialTotal,
+      });
+      // 1 KB of padding for any intermediary that needs a buffer to fill
+      // before flushing the first frame (compression, reverse proxies).
+      // Comment lines are ignored by NDJSON readers — we prefix with
+      // whitespace + newline.
+      controller.enqueue(encoder.encode(" ".repeat(1024) + "\n"));
+
+      // No throttle: ~100 events over 30-60s is trivial, and the UI
+      // benefits from seeing 1, 2, 3, … rather than skips.
+      const onProgress = (p: ScanProgress) => {
+        send({ type: "progress", ...p });
+      };
+
+      try {
+        const result = await runScan({
+          userId,
+          ...input,
+          indicators: [DEFAULT_STRATEGY],
+          onProgress,
+        });
+        send({ type: "result", data: result });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "Lỗi không xác định";
+        send({ type: "error", error: msg });
+      } finally {
+        closed = true;
+        controller.close();
+      }
+    },
+  });
+
+  return new Response(stream, {
+    headers: {
+      "Content-Type": "application/x-ndjson; charset=utf-8",
+      "Cache-Control": "no-store, no-transform",
+      // Disable buffering on nginx and similar reverse proxies.
+      "X-Accel-Buffering": "no",
+      // Skip gzip — compressors typically wait for ≥1KB of body before
+      // flushing, which delays small progress packets noticeably.
+      "Content-Encoding": "identity",
+    },
+  });
 }
 
 export async function GET(req: Request) {
