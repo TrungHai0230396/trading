@@ -6,6 +6,7 @@
  */
 
 import { GoogleGenerativeAI } from "@google/generative-ai";
+import { sharedBudget } from "@/lib/brokers/rate-limit";
 
 export class GeminiError extends Error {
   status?: number;
@@ -14,6 +15,22 @@ export class GeminiError extends Error {
     super(message);
     this.name = "GeminiError";
     this.status = status;
+  }
+}
+
+// One shared GEMINI_API_KEY billed to the owner. Free tier ≈ 15 RPM /
+// 1500 RPD for flash. Meter the key globally (12/min, 1400/day) so the
+// per-user AI limits can't sum past the shared daily quota. Exhaustion
+// throws GeminiError — callers already degrade gracefully.
+const GEMINI_PER_MINUTE = 12;
+const GEMINI_PER_DAY = 1400;
+
+function assertGeminiBudget(): void {
+  if (!sharedBudget("gemini", GEMINI_PER_MINUTE, GEMINI_PER_DAY)) {
+    throw new GeminiError(
+      "Đã đạt giới hạn AI chung trong hôm nay. Thử lại sau.",
+      429,
+    );
   }
 }
 
@@ -168,6 +185,7 @@ async function callGemini(
   modelId: string,
   prompt: string,
 ): Promise<string> {
+  assertGeminiBudget();
   const model = client().getGenerativeModel({
     model: modelId,
     systemInstruction: SYSTEM_PROMPT,
@@ -193,6 +211,7 @@ export async function callGeminiJson(opts: {
   prompt: string;
   temperature?: number;
 }): Promise<{ raw: string; modelId: string }> {
+  assertGeminiBudget();
   const callOnce = async (modelId: string) => {
     const model = client().getGenerativeModel({
       model: modelId,

@@ -4,6 +4,7 @@ import { auth } from "@/lib/auth";
 import { refreshNewsForUser } from "@/lib/news/service";
 import { CryptoPanicError } from "@/lib/news/cryptopanic";
 import { GeminiError } from "@/lib/ai/gemini";
+import { rateLimit } from "@/lib/brokers/rate-limit";
 
 const FILTERS = [
   "rising",
@@ -23,8 +24,18 @@ const bodySchema = z
 
 export async function POST(req: Request) {
   const session = await auth();
-  if (!session?.user) {
+  if (!session?.user?.id) {
     return NextResponse.json({ error: "Chưa đăng nhập" }, { status: 401 });
+  }
+
+  // Each refresh fans out to CryptoPanic + a batch of Gemini summaries on
+  // the owner's shared keys. Cap hard — this route isn't even linked in the
+  // nav anymore, so a human never needs more than a couple per hour.
+  if (!rateLimit(`news-refresh:${session.user.id}`, 5, 60 * 60_000)) {
+    return NextResponse.json(
+      { error: "Bạn làm mới tin quá nhiều lần. Thử lại sau." },
+      { status: 429 },
+    );
   }
 
   let body: unknown = undefined;

@@ -3,6 +3,7 @@ import { z } from "zod";
 import { auth } from "@/lib/auth";
 import { getCandles, type Timeframe } from "@/lib/scanner/candles";
 import { ALL_TIMEFRAMES } from "@/lib/scanner/candles";
+import { rateLimit } from "@/lib/brokers/rate-limit";
 
 const requestSchema = z.object({
   market: z.enum(["FOREX", "CRYPTO"]),
@@ -13,8 +14,18 @@ const requestSchema = z.object({
 
 export async function POST(req: Request) {
   const session = await auth();
-  if (!session?.user) {
+  if (!session?.user?.id) {
     return NextResponse.json({ error: "Chưa đăng nhập" }, { status: 401 });
+  }
+
+  // Each call pulls up to 1000 bars from Binance (public) or the shared
+  // TwelveData key. Cap per user so a loop can't hammer either. The global
+  // TwelveData budget in candles.ts is the ultimate backstop for forex.
+  if (!rateLimit(`candles:${session.user.id}`, 30, 60_000)) {
+    return NextResponse.json(
+      { error: "Bạn tải biểu đồ quá nhanh. Thử lại sau ít giây." },
+      { status: 429 },
+    );
   }
 
   let body: unknown;

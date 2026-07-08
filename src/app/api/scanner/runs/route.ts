@@ -5,6 +5,15 @@ import { db } from "@/lib/db";
 import { runScan, type ScanProgress } from "@/lib/scanner/runner";
 import { ALL_TIMEFRAMES } from "@/lib/scanner/candles";
 import { DEFAULT_STRATEGY } from "@/lib/scanner/strategies";
+import { rateLimit } from "@/lib/brokers/rate-limit";
+
+// A single run fans out up to ~50 symbols × 7 TFs (+100 consensus-universe
+// symbols) of UNCACHED candle fetches and persists a run + its results. It
+// is by far the heaviest endpoint, so the per-user cap is strict.
+const MAX_RUNS_PER_HOUR = 10;
+// Keep only this many most-recent runs per user — bounds MySQL + nightly
+// backup growth even under sustained (rate-limited) use.
+const RUN_RETENTION_PER_USER = 100;
 
 const requestSchema = z
   .object({
@@ -30,8 +39,18 @@ const requestSchema = z
 
 export async function POST(req: Request) {
   const session = await auth();
-  if (!session?.user) {
+  if (!session?.user?.id) {
     return NextResponse.json({ error: "Chưa đăng nhập" }, { status: 401 });
+  }
+
+  if (!rateLimit(`scanner-run:${session.user.id}`, MAX_RUNS_PER_HOUR, 60 * 60_000)) {
+    return NextResponse.json(
+      {
+        error:
+          "Bạn đã chạy quá nhiều lượt quét trong giờ này. Thử lại sau ít phút.",
+      },
+      { status: 429 },
+    );
   }
 
   let body: unknown;
@@ -99,6 +118,24 @@ export async function POST(req: Request) {
           onProgress,
         });
         send({ type: "result", data: result });
+
+        // Best-effort retention prune — bound DB/backup growth. Never let a
+        // prune failure surface as a scan error; the result is already sent.
+        try {
+          const stale = await db.analysisRun.findMany({
+            where: { userId },
+            orderBy: { createdAt: "desc" },
+            skip: RUN_RETENTION_PER_USER,
+            select: { id: true },
+          });
+          if (stale.length > 0) {
+            await db.analysisRun.deleteMany({
+              where: { id: { in: stale.map((s) => s.id) } },
+            });
+          }
+        } catch {
+          // swallow — retention is housekeeping, not user-facing
+        }
       } catch (err) {
         const msg = err instanceof Error ? err.message : "Lỗi không xác định";
         send({ type: "error", error: msg });

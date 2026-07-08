@@ -2,6 +2,13 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { auth } from "@/lib/auth";
 import { db } from "@/lib/db";
+import { rateLimit } from "@/lib/brokers/rate-limit";
+
+// A public user could otherwise loop this endpoint to insert millions of
+// fabricated rows into MySQL (and every nightly backup). Bound it three ways.
+const MAX_TRADES_PER_BATCH = 500;
+const MAX_IMPORTS_PER_HOUR = 5;
+const MAX_TRADES_PER_USER = 20_000;
 
 // Trade payload coming back from the preview step. Dates arrive as ISO
 // strings via JSON; the rest mirror `ParsedTrade` from the parser.
@@ -24,7 +31,7 @@ const tradeSchema = z.object({
 });
 
 const bodySchema = z.object({
-  trades: z.array(tradeSchema).min(1).max(2000),
+  trades: z.array(tradeSchema).min(1).max(MAX_TRADES_PER_BATCH),
   accountId: z.string().trim().min(1).max(64).optional().nullable(),
   dedupe: z.boolean().default(true),
 });
@@ -52,10 +59,17 @@ function toSchemaMarket(m: CommitTrade["market"]) {
 
 export async function POST(req: Request) {
   const session = await auth();
-  if (!session?.user) {
+  if (!session?.user?.id) {
     return NextResponse.json({ error: "Chưa đăng nhập" }, { status: 401 });
   }
   const userId = session.user.id;
+
+  if (!rateLimit(`import:${userId}`, MAX_IMPORTS_PER_HOUR, 60 * 60_000)) {
+    return NextResponse.json(
+      { error: "Bạn nhập lệnh quá nhiều lần. Thử lại sau ít phút." },
+      { status: 429 },
+    );
+  }
 
   let raw: unknown;
   try {
@@ -73,6 +87,19 @@ export async function POST(req: Request) {
   }
 
   const { trades, accountId, dedupe } = parsed.data;
+
+  // Hard ceiling on total journal rows per user — a backstop against
+  // scripted bulk-insert bloat that the per-batch + per-hour caps alone
+  // wouldn't stop over many hours.
+  const existingCount = await db.tradeJournal.count({ where: { userId } });
+  if (existingCount + trades.length > MAX_TRADES_PER_USER) {
+    return NextResponse.json(
+      {
+        error: `Vượt giới hạn ${MAX_TRADES_PER_USER.toLocaleString("vi-VN")} lệnh cho tài khoản. Hãy xoá bớt lệnh cũ trước khi nhập thêm.`,
+      },
+      { status: 400 },
+    );
+  }
 
   // Validate account ownership if specified.
   let resolvedAccountId: string | null = null;

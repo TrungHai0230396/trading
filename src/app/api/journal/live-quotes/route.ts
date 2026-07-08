@@ -16,6 +16,7 @@ import { auth } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { getPrice, type Market } from "@/lib/quotes";
 import { derivePnl } from "@/lib/journal/derive";
+import { rateLimit } from "@/lib/brokers/rate-limit";
 
 export const runtime = "nodejs";
 
@@ -35,6 +36,12 @@ export async function GET() {
   const session = await auth();
   if (!session?.user?.id) {
     return NextResponse.json({ error: "Chưa đăng nhập" }, { status: 401 });
+  }
+
+  // Normal client polls ~every 30s (2/min). Cap well above that so real use
+  // never trips, but a scripted loop fanning out to Binance/TwelveData does.
+  if (!rateLimit(`live-quotes:${session.user.id}`, 12, 60_000)) {
+    return NextResponse.json({ quotes: [] }, { status: 429 });
   }
 
   const open = await db.tradeJournal.findMany({

@@ -17,6 +17,7 @@ import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { buildAnalysisSnapshot } from "@/lib/analysis/snapshot";
 import { runSymbolAnalysis } from "@/lib/ai/symbol-analysis";
+import { rateLimit } from "@/lib/brokers/rate-limit";
 
 export const runtime = "nodejs";
 
@@ -24,8 +25,17 @@ type RouteCtx = { params: Promise<{ market: string; symbol: string }> };
 
 export async function POST(_req: Request, ctx: RouteCtx) {
   const session = await auth();
-  if (!session?.user) {
+  if (!session?.user?.id) {
     return NextResponse.json({ error: "Chưa đăng nhập" }, { status: 401 });
+  }
+
+  // Each call spends Gemini quota on the shared GEMINI_API_KEY (the owner's
+  // bill). Cap it so one user can't loop the button and drain quota/cost.
+  if (!rateLimit(`ai-scan:${session.user.id}`, 15, 60 * 60_000)) {
+    return NextResponse.json(
+      { error: "Bạn đã dùng hết lượt phân tích AI trong giờ này. Thử lại sau." },
+      { status: 429 },
+    );
   }
 
   const { market: rawMarket, symbol: rawSymbol } = await ctx.params;

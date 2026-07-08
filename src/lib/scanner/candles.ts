@@ -15,6 +15,16 @@
  */
 
 import { findForexPair, tdSymbol } from "@/lib/calc/forex-pairs";
+import { sharedBudget } from "@/lib/brokers/rate-limit";
+
+// TwelveData free tier ≈ 8 credits/min, 800/day, billed to the owner's ONE
+// shared key. Meter the key globally (7/min, 700/day — one under each ceiling)
+// so no single user/scan can drain the daily quota. Bulk forex scanning is
+// inherently free-tier-bound anyway; this just fails it predictably instead
+// of burning the whole day's allowance. CRYPTO uses Binance (public, free) so
+// it is intentionally NOT metered here.
+const TD_PER_MINUTE = 7;
+const TD_PER_DAY = 700;
 
 export type Market = "FOREX" | "CRYPTO";
 export type Timeframe = "15m" | "1h" | "4h" | "1d" | "3d" | "1w" | "1M";
@@ -187,6 +197,13 @@ async function fetchTwelveDataCloses(
   interval: string,
   limit: number,
 ): Promise<number[]> {
+  if (!sharedBudget("twelvedata", TD_PER_MINUTE, TD_PER_DAY)) {
+    throw new CandleFetchError(
+      "Đã đạt giới hạn dữ liệu forex chung (Twelve Data) lúc này. Thử lại sau ít phút hoặc dùng khung lớn hơn.",
+      429,
+    );
+  }
+
   const url = new URL("https://api.twelvedata.com/time_series");
   url.searchParams.set("symbol", tdSym);
   url.searchParams.set("interval", interval);

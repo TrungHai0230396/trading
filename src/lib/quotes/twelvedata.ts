@@ -1,6 +1,14 @@
 /** Twelve Data forex/crypto quote — needs TWELVE_DATA_API_KEY. */
 
+import { sharedBudget } from "@/lib/brokers/rate-limit";
+
 const BASE = "https://api.twelvedata.com";
+
+// Same shared-key budget as the candle fetcher — a symbol-rotating loop on
+// /api/quote (each distinct symbol misses the 8s cache) or a 30-symbol
+// live-quotes poll must not outrun the owner's TwelveData daily quota.
+const TD_PER_MINUTE = 7;
+const TD_PER_DAY = 700;
 
 export class TwelveDataError extends Error {
   constructor(message: string, readonly status?: number) {
@@ -23,6 +31,13 @@ function apiKey(): string {
  * `symbol` examples: "EUR/USD", "USD/JPY", "BTC/USD".
  */
 export async function getTwelveDataPrice(symbol: string): Promise<number> {
+  if (!sharedBudget("twelvedata", TD_PER_MINUTE, TD_PER_DAY)) {
+    throw new TwelveDataError(
+      "Đã đạt giới hạn giá forex chung lúc này. Thử lại sau ít phút.",
+      429,
+    );
+  }
+
   const url = new URL("/price", BASE);
   url.searchParams.set("symbol", symbol);
   url.searchParams.set("apikey", apiKey());
