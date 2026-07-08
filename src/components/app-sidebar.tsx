@@ -3,7 +3,7 @@
 import * as React from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { LineChart, LogOut } from "lucide-react";
+import { LineChart, LogOut, Gauge } from "lucide-react";
 import { signOut, useSession } from "next-auth/react";
 
 import {
@@ -27,7 +27,7 @@ function isActiveHref(pathname: string, href: string) {
   return pathname === href || pathname.startsWith(`${href}/`);
 }
 
-export function AppSidebar() {
+export function AppSidebar({ isAdmin = false }: { isAdmin?: boolean }) {
   const pathname = usePathname();
   const { data: session } = useSession();
   const initials =
@@ -82,6 +82,26 @@ export function AppSidebar() {
             </SidebarGroupContent>
           </SidebarGroup>
         ))}
+
+        {isAdmin ? (
+          <SidebarGroup>
+            <SidebarGroupLabel>Quản trị</SidebarGroupLabel>
+            <SidebarGroupContent>
+              <SidebarMenu>
+                <SidebarMenuItem>
+                  <SidebarMenuButton
+                    render={<Link href="/admin" />}
+                    isActive={isActiveHref(pathname, "/admin")}
+                    tooltip="Quản trị"
+                  >
+                    <Gauge />
+                    <span>Quản trị</span>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
+        ) : null}
       </SidebarContent>
 
       <SidebarFooter>

@@ -39,50 +39,43 @@ export async function register() {
   const { runConsensusScanForAllUsers } = await import(
     "@/lib/cron/consensus-scan"
   );
+  const { recordHeartbeat } = await import("@/lib/cron/heartbeat");
 
-  // Overlap guards: a slow tick (Bitget latency, many users) must not stack
-  // a second run on top of itself.
-  let syncRunning = false;
-  setInterval(async () => {
-    if (syncRunning) return;
-    syncRunning = true;
-    try {
-      await runBrokerSyncForAllUsers();
-    } catch (e) {
-      console.error("[cron:sync] tick failed", e);
-    } finally {
-      syncRunning = false;
-    }
-  }, SYNC_INTERVAL_MS);
+  // Wrap a cron in an overlap guard (a slow tick must not stack on itself)
+  // + a heartbeat record so the admin page can show last-run/ok/duration.
+  const guarded = (name: string, fn: () => Promise<unknown>) => {
+    let running = false;
+    return async () => {
+      if (running) return;
+      running = true;
+      const startedAt = Date.now();
+      try {
+        await fn();
+        recordHeartbeat(name, true, Date.now() - startedAt);
+      } catch (e) {
+        recordHeartbeat(
+          name,
+          false,
+          Date.now() - startedAt,
+          e instanceof Error ? e.message : String(e),
+        );
+        console.error(`[cron:${name}] tick failed`, e);
+      } finally {
+        running = false;
+      }
+    };
+  };
 
-  let scanRunning = false;
-  setInterval(async () => {
-    if (scanRunning) return;
-    scanRunning = true;
-    try {
-      await runConsensusScanForAllUsers();
-    } catch (e) {
-      console.error("[cron:consensus] tick failed", e);
-    } finally {
-      scanRunning = false;
-    }
-  }, CONSENSUS_INTERVAL_MS);
+  setInterval(guarded("broker-sync", runBrokerSyncForAllUsers), SYNC_INTERVAL_MS);
+  setInterval(
+    guarded("consensus-scan", runConsensusScanForAllUsers),
+    CONSENSUS_INTERVAL_MS,
+  );
 
   const { runNewsRefreshForAllUsers } = await import(
     "@/lib/cron/news-refresh"
   );
-  let newsRunning = false;
-  const newsTick = async () => {
-    if (newsRunning) return;
-    newsRunning = true;
-    try {
-      await runNewsRefreshForAllUsers();
-    } catch (e) {
-      console.error("[cron:news] tick failed", e);
-    } finally {
-      newsRunning = false;
-    }
-  };
+  const newsTick = guarded("news-refresh", runNewsRefreshForAllUsers);
   setInterval(newsTick, NEWS_INTERVAL_MS);
   // Prime once shortly after boot so a fresh deploy isn't news-empty for
   // a full hour.

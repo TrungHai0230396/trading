@@ -6,6 +6,9 @@ const PUBLIC_PATHS = [
   "/terms",
   "/api/auth",
   "/api/register",
+  // Public liveness probe for external uptime monitors — leaks nothing
+  // sensitive (see src/app/api/health/route.ts).
+  "/api/health",
 ];
 
 function isPublic(pathname: string): boolean {
