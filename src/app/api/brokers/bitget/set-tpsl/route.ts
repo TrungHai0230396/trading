@@ -19,12 +19,22 @@ import { db } from "@/lib/db";
 import { loadCreds } from "@/lib/brokers/store";
 import { rateLimit } from "@/lib/brokers/rate-limit";
 import {
+  canAutoTrade,
+  AUTOTRADE_FORBIDDEN_MESSAGE,
+} from "@/lib/brokers/entitlements";
+import {
   fetchContractSpec,
   holdSideForTpsl,
   placePositionSL,
   BitgetError,
   type BitgetCreds,
 } from "@/lib/brokers/bitget";
+import {
+  fetchContractSpec as binanceFetchContractSpec,
+  replacePositionStop,
+  BinanceError,
+  type BinanceCreds,
+} from "@/lib/brokers/binance";
 import {
   roundAwayFromEntry,
   stepDecimals,
@@ -57,6 +67,14 @@ export async function POST(req: Request) {
   }
   const userId = session.user.id;
 
+  // Entitlement — read-only accounts cannot touch live orders/positions.
+  if (!(await canAutoTrade(userId))) {
+    return NextResponse.json(
+      { error: AUTOTRADE_FORBIDDEN_MESSAGE },
+      { status: 403 },
+    );
+  }
+
   if (!rateLimit(`broker-tpsl:${userId}`, 10, 60_000)) {
     return NextResponse.json(
       { error: "Quá nhiều lần sửa SL/TP trong 1 phút. Đợi rồi thử lại." },
@@ -79,8 +97,9 @@ export async function POST(req: Request) {
     );
   }
 
+  // Dispatch by the order's own broker — the /bitget/ path is historical.
   const order = await db.brokerOrder.findFirst({
-    where: { id: parsed.data.brokerOrderId, userId, broker: "BITGET" },
+    where: { id: parsed.data.brokerOrderId, userId },
   });
   if (!order) {
     return NextResponse.json(
@@ -115,17 +134,14 @@ export async function POST(req: Request) {
     );
   }
 
-  const creds = await loadCreds<BitgetCreds>(userId, "BITGET");
-  if (!creds) {
-    return NextResponse.json(
-      { error: "Chưa kết nối Bitget." },
-      { status: 404 },
-    );
-  }
+  const isBinance = order.broker === "BINANCE";
+  const brokerName = isBinance ? "Binance" : "Bitget";
 
   let spec: Awaited<ReturnType<typeof fetchContractSpec>>;
   try {
-    spec = await fetchContractSpec(order.symbol);
+    spec = isBinance
+      ? await binanceFetchContractSpec(order.symbol)
+      : await fetchContractSpec(order.symbol);
   } catch (e) {
     return NextResponse.json(
       { error: e instanceof Error ? e.message : "Không tra được hợp đồng." },
@@ -134,7 +150,7 @@ export async function POST(req: Request) {
   }
   if (!spec) {
     return NextResponse.json(
-      { error: "Không tra được hợp đồng Bitget." },
+      { error: `Không tra được hợp đồng ${brokerName}.` },
       { status: 404 },
     );
   }
@@ -162,34 +178,73 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: validation.error }, { status: 400 });
   }
 
-  // 43011 guard: one-way accounts need buy/sell, hedge needs long/short.
-  const holdSide = holdSideForTpsl(order.side, order.posMode);
   const results: { sl?: string; tp?: string } = {};
+  const positionSide: "long" | "short" =
+    order.side === "buy" ? "long" : "short";
 
   try {
-    if (slRounded !== undefined) {
-      const slStr = slRounded.toFixed(dec);
-      await placePositionSL(creds, {
-        symbol: order.symbol,
-        holdSide,
-        triggerPrice: slStr,
-        planType: "pos_loss",
-        triggerType: "mark_price",
-        clientOid: `tpsl_${order.id}_sl_${Date.now()}`.slice(0, 36),
-      });
-      results.sl = slStr;
-    }
-    if (tpRounded !== undefined) {
-      const tpStr = tpRounded.toFixed(dec);
-      await placePositionSL(creds, {
-        symbol: order.symbol,
-        holdSide,
-        triggerPrice: tpStr,
-        planType: "pos_profit",
-        triggerType: "mark_price",
-        clientOid: `tpsl_${order.id}_tp_${Date.now()}`.slice(0, 36),
-      });
-      results.tp = tpStr;
+    if (isBinance) {
+      const creds = await loadCreds<BinanceCreds>(userId, "BINANCE");
+      if (!creds) {
+        return NextResponse.json(
+          { error: "Chưa kết nối Binance." },
+          { status: 404 },
+        );
+      }
+      if (slRounded !== undefined) {
+        const slStr = slRounded.toFixed(dec);
+        await replacePositionStop(creds, {
+          symbol: order.symbol,
+          positionSide,
+          kind: "sl",
+          triggerPrice: slStr,
+        });
+        results.sl = slStr;
+      }
+      if (tpRounded !== undefined) {
+        const tpStr = tpRounded.toFixed(dec);
+        await replacePositionStop(creds, {
+          symbol: order.symbol,
+          positionSide,
+          kind: "tp",
+          triggerPrice: tpStr,
+        });
+        results.tp = tpStr;
+      }
+    } else {
+      const creds = await loadCreds<BitgetCreds>(userId, "BITGET");
+      if (!creds) {
+        return NextResponse.json(
+          { error: "Chưa kết nối Bitget." },
+          { status: 404 },
+        );
+      }
+      // 43011 guard: one-way accounts need buy/sell, hedge needs long/short.
+      const holdSide = holdSideForTpsl(order.side, order.posMode);
+      if (slRounded !== undefined) {
+        const slStr = slRounded.toFixed(dec);
+        await placePositionSL(creds, {
+          symbol: order.symbol,
+          holdSide,
+          triggerPrice: slStr,
+          planType: "pos_loss",
+          triggerType: "mark_price",
+          clientOid: `tpsl_${order.id}_sl_${Date.now()}`.slice(0, 36),
+        });
+        results.sl = slStr;
+      }
+      if (tpRounded !== undefined) {
+        const tpStr = tpRounded.toFixed(dec);
+        await placePositionSL(creds, {
+          symbol: order.symbol,
+          holdSide,
+          triggerPrice: tpStr,
+          planType: "pos_profit",
+          triggerType: "mark_price",
+          clientOid: `tpsl_${order.id}_tp_${Date.now()}`.slice(0, 36),
+        });
+        results.tp = tpStr;
+      }
     }
   } catch (e) {
     // Partial success is possible (SL set, TP rejected). Report what
@@ -198,10 +253,10 @@ export async function POST(req: Request) {
       results.sl || results.tp
         ? ` Đã đặt được: ${results.sl ? `SL ${results.sl}` : ""}${results.sl && results.tp ? ", " : ""}${results.tp ? `TP ${results.tp}` : ""}.`
         : "";
-    if (e instanceof BitgetError) {
+    if (e instanceof BitgetError || e instanceof BinanceError) {
       return NextResponse.json(
         {
-          error: `Bitget từ chối (${e.code}): ${e.bitgetMsg ?? e.message}.${landed}`,
+          error: `${brokerName} từ chối (${e.code}): ${e.toVietnamese()}.${landed}`,
           code: e.code,
         },
         { status: 502 },

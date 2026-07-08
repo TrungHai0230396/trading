@@ -29,12 +29,26 @@
 import "server-only";
 import { db } from "@/lib/db";
 import { loadCreds } from "@/lib/brokers/store";
+import { deriveRMultiple } from "@/lib/journal/derive";
 import {
   getOrderDetail,
   getPositionHistory,
   BitgetError,
   type BitgetCreds,
 } from "@/lib/brokers/bitget";
+import {
+  getOrderDetail as binanceGetOrderDetail,
+  getSinglePosition as binanceGetSinglePosition,
+  getCloseSummary as binanceGetCloseSummary,
+  BinanceError,
+  type BinanceCreds,
+} from "@/lib/brokers/binance";
+
+/** Per-user creds for every broker the sync can reconcile. */
+type SyncCtx = {
+  bitget: BitgetCreds | null;
+  binance: BinanceCreds | null;
+};
 
 type BrokerOrderRow = Awaited<
   ReturnType<typeof db.brokerOrder.findFirst>
@@ -56,17 +70,24 @@ export type SyncResult = {
 
 /**
  * Sync one BrokerOrder row. Returns changes (if any). Best-effort: any
- * Bitget error is caught and reported in `result.errors` but does NOT
+ * broker error is caught and reported in `result.errors` but does NOT
  * fail the overall run — other rows still get a chance.
  */
 async function syncOne(
-  creds: BitgetCreds,
+  ctx: SyncCtx,
   row: NonNullable<BrokerOrderRow>,
 ): Promise<{ change: SyncChange | null; error: string | null }> {
+  const isBinance = row.broker === "BINANCE";
+  const creds = ctx.bitget; // Bitget paths below; guarded per-branch.
+  // Row's broker not connected (creds deleted after placing) → skip quietly.
+  if ((isBinance && !ctx.binance) || (!isBinance && !ctx.bitget)) {
+    return { change: null, error: null };
+  }
+
   // Phase 1: BrokerOrder state machine (PENDING/PLACED/UNKNOWN → FILLED /
   // CANCELLED). UNKNOWN is included so an order whose placement response was
   // lost (network/timeout, see order route) gets reconciled by clientOid
-  // instead of being abandoned — the order may actually be live on Bitget.
+  // instead of being abandoned — the order may actually be live.
   if (
     row.status === "PENDING" ||
     row.status === "PLACED" ||
@@ -74,13 +95,16 @@ async function syncOne(
     row.status === "UNKNOWN"
   ) {
     try {
-      const detail = await getOrderDetail(creds, {
+      const lookup = {
         symbol: row.symbol,
         // clientOid is the reliable key for UNKNOWN rows (they may have no
         // externalOrderId because the place response never arrived).
         orderId: row.externalOrderId ?? undefined,
         clientOid: row.clientOid,
-      });
+      };
+      const detail = isBinance
+        ? await binanceGetOrderDetail(ctx.binance!, lookup)
+        : await getOrderDetail(creds!, lookup);
       if (!detail) {
         // Order not found by orderId/clientOid. For an UNKNOWN row this
         // means the placement almost certainly never landed → leave it
@@ -180,7 +204,7 @@ async function syncOne(
       return {
         change: null,
         error:
-          e instanceof BitgetError
+          e instanceof BitgetError || e instanceof BinanceError
             ? e.toVietnamese()
             : e instanceof Error
               ? e.message
@@ -195,15 +219,91 @@ async function syncOne(
   if (row.status === "FILLED") {
     const journal = await db.tradeJournal.findUnique({
       where: { id: row.tradeJournalId },
-      select: { status: true, symbol: true, direction: true },
+      select: {
+        status: true,
+        symbol: true,
+        direction: true,
+        entryPrice: true,
+        stopLoss: true,
+        lotSize: true,
+        riskAmount: true,
+      },
     });
     if (!journal || journal.status !== "OPEN") {
       return { change: null, error: null };
     }
+
+    // ── Binance close detection ─────────────────────────────────────
+    // No "closed positions" endpoint on fapi. Instead: if the symbol has
+    // no open position anymore, the position closed — pull realized PnL,
+    // fees and the closing fills' weighted price from userTrades+income.
+    if (isBinance) {
+      try {
+        const pos = await binanceGetSinglePosition(ctx.binance!, row.symbol);
+        if (pos.hasPosition) return { change: null, error: null };
+        const summary = await binanceGetCloseSummary(
+          ctx.binance!,
+          row.symbol,
+          new Date(row.createdAt.getTime() - 5 * 60_000),
+        );
+        if (!summary) return { change: null, error: null };
+
+        const entry = Number(journal.entryPrice);
+        const sl = journal.stopLoss !== null ? Number(journal.stopLoss) : null;
+        const size = Number(journal.lotSize);
+        const existingRisk =
+          journal.riskAmount !== null ? Number(journal.riskAmount) : 0;
+        const derivedRisk =
+          sl !== null && Number.isFinite(entry) && Number.isFinite(size)
+            ? Math.abs(entry - sl) * size
+            : 0;
+        const riskAmount = existingRisk > 0 ? existingRisk : derivedRisk;
+        const rMultiple =
+          riskAmount > 0
+            ? deriveRMultiple(summary.netProfit, riskAmount)
+            : null;
+
+        await db.tradeJournal.update({
+          where: { id: row.tradeJournalId },
+          data: {
+            status: "CLOSED",
+            exitPrice: summary.exitPrice,
+            pnl: summary.netProfit,
+            closedAt: summary.lastFillAt ?? new Date(),
+            feesAmount: summary.totalFee + Math.abs(summary.totalFunding),
+            ...(rMultiple !== null ? { rMultiple } : {}),
+            ...(existingRisk <= 0 && derivedRisk > 0
+              ? { riskAmount: derivedRisk }
+              : {}),
+          },
+        });
+        return {
+          change: {
+            brokerOrderId: row.id,
+            tradeJournalId: row.tradeJournalId,
+            before: "FILLED→OPEN",
+            after: "CLOSED",
+            note: `Đã đóng${summary.exitPrice ? ` tại ${summary.exitPrice.toFixed(6)}` : ""}, PnL ${summary.netProfit >= 0 ? "+" : ""}${summary.netProfit.toFixed(2)} USDT${rMultiple !== null ? ` (${rMultiple >= 0 ? "+" : ""}${rMultiple.toFixed(2)}R)` : ""}`,
+          },
+          error: null,
+        };
+      } catch (e) {
+        return {
+          change: null,
+          error:
+            e instanceof BinanceError
+              ? e.toVietnamese()
+              : e instanceof Error
+                ? e.message
+                : "Lỗi không xác định",
+        };
+      }
+    }
+
     try {
       // Look back from the BrokerOrder createdAt with a 30-minute buffer.
       const since = new Date(row.createdAt.getTime() - 30 * 60_000);
-      const history = await getPositionHistory(creds, {
+      const history = await getPositionHistory(creds!, {
         symbol: row.symbol,
         startTime: since,
       });
@@ -250,6 +350,27 @@ async function syncOne(
       }
       if (!match) return { change: null, error: null };
 
+      // Backfill risk-derived metrics so broker-closed trades feed the stats
+      // bar with the same fields a manual close would.
+      //   riskAmount: use the user's value if set, else derive from the
+      //     planned stop distance × size (USDT the stop would have cost).
+      //   rMultiple: pnl / riskAmount — identical definition to manual closes
+      //     (see lib/journal/derive) so the R average stays consistent.
+      //   feesAmount: total open+close fees from Bitget (funding folded in).
+      const entry = Number(journal.entryPrice);
+      const sl = journal.stopLoss !== null ? Number(journal.stopLoss) : null;
+      const size = Number(journal.lotSize);
+      const existingRisk =
+        journal.riskAmount !== null ? Number(journal.riskAmount) : 0;
+      const derivedRisk =
+        sl !== null && Number.isFinite(entry) && Number.isFinite(size)
+          ? Math.abs(entry - sl) * size
+          : 0;
+      const riskAmount = existingRisk > 0 ? existingRisk : derivedRisk;
+      const rMultiple =
+        riskAmount > 0 ? deriveRMultiple(match.netProfit, riskAmount) : null;
+      const feesAmount = match.totalFee + Math.abs(match.totalFunding);
+
       await db.tradeJournal.update({
         where: { id: row.tradeJournalId },
         data: {
@@ -257,6 +378,13 @@ async function syncOne(
           exitPrice: match.closeAvgPrice,
           pnl: match.netProfit,
           closedAt: match.closedAt,
+          feesAmount,
+          ...(rMultiple !== null ? { rMultiple } : {}),
+          // Persist the derived risk if the user hadn't set one, so the
+          // R shown is reproducible.
+          ...(existingRisk <= 0 && derivedRisk > 0
+            ? { riskAmount: derivedRisk }
+            : {}),
         },
       });
       return {
@@ -265,7 +393,7 @@ async function syncOne(
           tradeJournalId: row.tradeJournalId,
           before: "FILLED→OPEN",
           after: "CLOSED",
-          note: `Đã đóng tại ${match.closeAvgPrice}, PnL ${match.netProfit >= 0 ? "+" : ""}${match.netProfit.toFixed(2)} USDT`,
+          note: `Đã đóng tại ${match.closeAvgPrice}, PnL ${match.netProfit >= 0 ? "+" : ""}${match.netProfit.toFixed(2)} USDT${rMultiple !== null ? ` (${rMultiple >= 0 ? "+" : ""}${rMultiple.toFixed(2)}R)` : ""}`,
         },
         error: null,
       };
@@ -273,7 +401,7 @@ async function syncOne(
       return {
         change: null,
         error:
-          e instanceof BitgetError
+          e instanceof BitgetError || e instanceof BinanceError
             ? e.toVietnamese()
             : e instanceof Error
               ? e.message
@@ -294,14 +422,18 @@ export async function syncUserBrokerOrders(
 ): Promise<SyncResult> {
   const result: SyncResult = { scanned: 0, changes: [], errors: [] };
 
-  const creds = await loadCreds<BitgetCreds>(userId, "BITGET");
-  if (!creds) return result; // no Bitget connected = nothing to sync
+  const [bitget, binance] = await Promise.all([
+    loadCreds<BitgetCreds>(userId, "BITGET"),
+    loadCreds<BinanceCreds>(userId, "BINANCE"),
+  ]);
+  if (!bitget && !binance) return result; // no broker connected
+  const ctx: SyncCtx = { bitget, binance };
 
-  // Anything still in a non-terminal state for this user.
+  // Anything still in a non-terminal state for this user, on any broker.
   const rows = await db.brokerOrder.findMany({
     where: {
       userId,
-      broker: "BITGET",
+      broker: { in: ["BITGET", "BINANCE"] },
       status: {
         in: ["PENDING", "PLACED", "PLACED_NO_SL", "FILLED", "UNKNOWN"],
       },
@@ -312,7 +444,7 @@ export async function syncUserBrokerOrders(
 
   result.scanned = rows.length;
   for (const row of rows) {
-    const r = await syncOne(creds, row);
+    const r = await syncOne(ctx, row);
     if (r.change) result.changes.push(r.change);
     if (r.error)
       result.errors.push({ brokerOrderId: row.id, message: r.error });

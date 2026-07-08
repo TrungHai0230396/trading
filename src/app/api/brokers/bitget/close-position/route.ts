@@ -17,10 +17,19 @@ import { db } from "@/lib/db";
 import { loadCreds } from "@/lib/brokers/store";
 import { rateLimit } from "@/lib/brokers/rate-limit";
 import {
+  canAutoTrade,
+  AUTOTRADE_FORBIDDEN_MESSAGE,
+} from "@/lib/brokers/entitlements";
+import {
   flashClosePosition,
   BitgetError,
   type BitgetCreds,
 } from "@/lib/brokers/bitget";
+import {
+  flashClosePosition as binanceFlashClose,
+  BinanceError,
+  type BinanceCreds,
+} from "@/lib/brokers/binance";
 import { syncUserBrokerOrders } from "@/lib/brokers/sync";
 
 export const runtime = "nodejs";
@@ -42,6 +51,14 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Chưa đăng nhập" }, { status: 401 });
   }
   const userId = session.user.id;
+
+  // Entitlement — read-only accounts cannot touch live orders/positions.
+  if (!(await canAutoTrade(userId))) {
+    return NextResponse.json(
+      { error: AUTOTRADE_FORBIDDEN_MESSAGE },
+      { status: 403 },
+    );
+  }
 
   if (!rateLimit(`broker-close:${userId}`, 10, 60_000)) {
     return NextResponse.json(
@@ -65,8 +82,9 @@ export async function POST(req: Request) {
     );
   }
 
+  // Dispatch by the order's own broker — the /bitget/ path is historical.
   const order = await db.brokerOrder.findFirst({
-    where: { id: parsed.data.brokerOrderId, userId, broker: "BITGET" },
+    where: { id: parsed.data.brokerOrderId, userId },
   });
   if (!order) {
     return NextResponse.json(
@@ -83,31 +101,40 @@ export async function POST(req: Request) {
     );
   }
 
-  const creds = await loadCreds<BitgetCreds>(userId, "BITGET");
-  if (!creds) {
-    return NextResponse.json(
-      { error: "Chưa kết nối Bitget." },
-      { status: 404 },
-    );
-  }
-
-  // Flash-close: holdSide is only meaningful (and only accepted as
-  // long/short) in hedge mode. In one-way mode the symbol has at most one
-  // position — omit it or Bitget may reject with 43011.
-  const holdSide =
-    order.posMode === "hedge_mode"
-      ? order.side === "buy"
-        ? ("long" as const)
-        : ("short" as const)
-      : undefined;
-
   try {
-    await flashClosePosition(creds, { symbol: order.symbol, holdSide });
+    if (order.broker === "BINANCE") {
+      const creds = await loadCreds<BinanceCreds>(userId, "BINANCE");
+      if (!creds) {
+        return NextResponse.json(
+          { error: "Chưa kết nối Binance." },
+          { status: 404 },
+        );
+      }
+      await binanceFlashClose(creds, order.symbol);
+    } else {
+      const creds = await loadCreds<BitgetCreds>(userId, "BITGET");
+      if (!creds) {
+        return NextResponse.json(
+          { error: "Chưa kết nối Bitget." },
+          { status: 404 },
+        );
+      }
+      // Flash-close: holdSide is only meaningful (and only accepted as
+      // long/short) in hedge mode. In one-way mode the symbol has at most
+      // one position — omit it or Bitget may reject with 43011.
+      const holdSide =
+        order.posMode === "hedge_mode"
+          ? order.side === "buy"
+            ? ("long" as const)
+            : ("short" as const)
+          : undefined;
+      await flashClosePosition(creds, { symbol: order.symbol, holdSide });
+    }
   } catch (e) {
-    if (e instanceof BitgetError) {
+    if (e instanceof BitgetError || e instanceof BinanceError) {
       return NextResponse.json(
         {
-          error: `Bitget từ chối đóng (${e.code}): ${e.bitgetMsg ?? e.message}`,
+          error: `${order.broker === "BINANCE" ? "Binance" : "Bitget"} từ chối đóng (${e.code}): ${e.toVietnamese()}`,
           code: e.code,
         },
         { status: 502 },

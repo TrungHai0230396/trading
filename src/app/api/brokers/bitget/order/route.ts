@@ -1,21 +1,25 @@
 /**
  * POST /api/brokers/bitget/order
  *
- * Real-money endpoint. Auto-places a Bitget USDT-FUTURES order tied to
- * an existing TradeJournal row. The journal write is independent — if
- * this endpoint fails, the user still has their plan saved.
+ * Real-money endpoint. Auto-places a USDT-M futures order (Bitget OR
+ * Binance — dispatched by body.broker, default BITGET; the /bitget/ path
+ * segment is historical) tied to an existing TradeJournal row. The
+ * journal write is independent — if this endpoint fails, the user still
+ * has their plan saved.
  *
  * Safety rails (matching the Phase 2 design critique):
- *   - Kill-switch via env BITGET_AUTOPLACE_ENABLED ("true" required).
+ *   - Kill-switch via env BITGET_AUTOPLACE_ENABLED ("true" required —
+ *     one switch gates BOTH brokers).
  *   - Auth + per-user rate limit (5 attempts / journal / minute).
  *   - clientOid = "tj_<journalId>_<attempt>" — DB unique on (broker,clientOid).
  *   - Refuse hedge-mode accounts.
  *   - Normalize size/price to contract step.
  *   - Validate min size + min notional.
- *   - Pre-check available balance vs estimated margin.
- *   - Skip setLeverage if a position is already open on the symbol.
- *   - After place succeeds, verify presetStopLoss actually registered
- *     on Bitget; flag PLACED_NO_SL if not.
+ *   - Pre-check available balance vs estimated margin (effective leverage).
+ *   - Risk limits: max risk %/trade + max open positions.
+ *   - After place succeeds, verify the SL actually attached (Bitget:
+ *     preset read-back; Binance: bracket order accepted); flag
+ *     PLACED_NO_SL if not.
  */
 
 import { NextResponse } from "next/server";
@@ -23,21 +27,18 @@ import { z } from "zod";
 
 import { auth } from "@/lib/auth";
 import { db } from "@/lib/db";
-import { loadCreds } from "@/lib/brokers/store";
 import { rateLimit } from "@/lib/brokers/rate-limit";
 import {
-  fetchContractSpec,
-  getAccountBalance,
-  getOpenPositions,
-  getOrderDetail,
-  getPositionMode,
-  getSinglePosition,
-  placeOrder,
-  setLeverage,
-  BitgetError,
-  type BitgetCreds,
-} from "@/lib/brokers/bitget";
+  getBrokerApi,
+  brokerErrorInfo,
+  isBrokerReject,
+  type BrokerApi,
+} from "@/lib/brokers/adapter";
 import { getRiskLimits } from "@/lib/brokers/risk-limits";
+import {
+  canAutoTrade,
+  AUTOTRADE_FORBIDDEN_MESSAGE,
+} from "@/lib/brokers/entitlements";
 import {
   estimateLiquidationPrice,
   floorToStep,
@@ -51,6 +52,7 @@ export const runtime = "nodejs";
 
 const Body = z.object({
   tradeJournalId: z.string().min(1),
+  broker: z.enum(["BITGET", "BINANCE"]).default("BITGET"),
   symbol: z.string().trim().min(3).max(20).regex(/^[A-Z0-9]+$/),
   direction: z.enum(["LONG", "SHORT"]),
   /** Base-coin units (e.g. 0.005 BTC). */
@@ -99,6 +101,12 @@ export async function POST(req: Request) {
     return fail(401, "Chưa đăng nhập", "validate");
   }
   const userId = session.user.id;
+
+  // 1a. Entitlement — the public product is read-only; live order
+  //     placement requires a per-user grant (env allowlist / AppSetting).
+  if (!(await canAutoTrade(userId))) {
+    return fail(403, AUTOTRADE_FORBIDDEN_MESSAGE, "validate");
+  }
 
   // 2. Parse body.
   let raw: unknown;
@@ -159,8 +167,25 @@ export async function POST(req: Request) {
   }
 
   // 5. Idempotency: pick next attempt number, reserve via unique index.
+  // Scoped per (journal, broker) — but a LIVE order on the OTHER broker
+  // also blocks (one intended trade must not become two real positions).
+  const priorAny = await db.brokerOrder.findFirst({
+    where: {
+      tradeJournalId: input.tradeJournalId,
+      broker: { not: input.broker },
+      status: { in: ["PENDING", "PLACED", "PLACED_NO_SL", "FILLED"] },
+    },
+    select: { broker: true, status: true },
+  });
+  if (priorAny) {
+    return fail(
+      409,
+      `Mục nhật ký này đã có lệnh thật trên ${priorAny.broker} (${priorAny.status}). Không đặt song song trên 2 sàn.`,
+      "validate",
+    );
+  }
   const prior = await db.brokerOrder.findMany({
-    where: { tradeJournalId: input.tradeJournalId, broker: "BITGET" },
+    where: { tradeJournalId: input.tradeJournalId, broker: input.broker },
     orderBy: { attempt: "desc" },
     take: 1,
   });
@@ -190,61 +215,62 @@ export async function POST(req: Request) {
   const attempt = lastAttempt + 1;
   const clientOid = `tj_${input.tradeJournalId}_${attempt}`.slice(0, 36);
 
-  // 6. Load creds.
-  const creds = await loadCreds<BitgetCreds>(userId, "BITGET");
-  if (!creds) {
+  // 6. Broker API (creds loaded inside).
+  const brokerName = input.broker === "BINANCE" ? "Binance" : "Bitget";
+  const api: BrokerApi | null = await getBrokerApi(input.broker, userId);
+  if (!api) {
     return fail(
       404,
-      "Chưa kết nối Bitget. Vào Cài đặt → Sàn giao dịch để thêm API key.",
+      `Chưa kết nối ${brokerName}. Vào Cài đặt → Sàn giao dịch để thêm API key.`,
       "validate",
     );
   }
 
   // 7. Contract spec + position mode (parallel — both required).
-  let spec: Awaited<ReturnType<typeof fetchContractSpec>>;
-  let posMode: Awaited<ReturnType<typeof getPositionMode>>;
+  let spec: Awaited<ReturnType<BrokerApi["fetchContractSpec"]>>;
+  let posMode: Awaited<ReturnType<BrokerApi["getPositionMode"]>>;
   try {
     [spec, posMode] = await Promise.all([
-      fetchContractSpec(input.symbol),
-      getPositionMode(creds),
+      api.fetchContractSpec(input.symbol),
+      api.getPositionMode(),
     ]);
   } catch (e) {
+    const info = brokerErrorInfo(e);
     return fail(
       502,
-      e instanceof BitgetError
-        ? e.toVietnamese()
-        : e instanceof Error
+      info?.message ??
+        (e instanceof Error
           ? e.message
-          : "Không tra được thông tin tài khoản Bitget.",
+          : `Không tra được thông tin tài khoản ${brokerName}.`),
       "validate",
-      e instanceof BitgetError ? e.code : undefined,
+      info?.code,
     );
   }
   if (!spec) {
     return fail(
       404,
-      "Cặp không có trên Bitget USDT-Futures hoặc đã ngừng giao dịch.",
+      `Cặp không có trên ${brokerName} USDT-Futures hoặc đã ngừng giao dịch.`,
       "validate",
     );
   }
   if (spec.symbolStatus !== "normal") {
     return fail(
       409,
-      `Cặp đang ở trạng thái ${spec.symbolStatus} trên Bitget — không vào lệnh được.`,
+      `Cặp đang ở trạng thái ${spec.symbolStatus} trên ${brokerName} — không vào lệnh được.`,
       "validate",
     );
   }
   if (posMode === "hedge_mode") {
     return fail(
       400,
-      "Tài khoản đang ở chế độ Hedge — Phase này chỉ hỗ trợ One-way. Chuyển sang One-way trong Bitget để dùng tính năng.",
+      `Tài khoản đang ở chế độ Hedge — Phase này chỉ hỗ trợ One-way. Chuyển sang One-way trong ${brokerName} để dùng tính năng.`,
       "validate",
     );
   }
   if (posMode === "unknown") {
     return fail(
       502,
-      "Không xác định được chế độ vị thế Bitget (one-way/hedge).",
+      `Không xác định được chế độ vị thế ${brokerName} (one-way/hedge).`,
       "validate",
     );
   }
@@ -318,25 +344,24 @@ export async function POST(req: Request) {
   //     position forces its leverage on any add — checking margin at the
   //     requested leverage would under-estimate the real margin required.
   //     All open positions are needed for the max-concurrent-positions cap.
-  let balance: Awaited<ReturnType<typeof getAccountBalance>>;
-  let existing: Awaited<ReturnType<typeof getSinglePosition>>;
-  let allPositions: Awaited<ReturnType<typeof getOpenPositions>>;
+  let balance: Awaited<ReturnType<BrokerApi["getAccountBalance"]>>;
+  let existing: Awaited<ReturnType<BrokerApi["getSinglePosition"]>>;
+  let allPositions: Awaited<ReturnType<BrokerApi["getOpenPositions"]>>;
   let riskLimits: Awaited<ReturnType<typeof getRiskLimits>>;
   try {
     [balance, existing, allPositions, riskLimits] = await Promise.all([
-      getAccountBalance(creds),
-      getSinglePosition(creds, input.symbol),
-      getOpenPositions(creds),
+      api.getAccountBalance(),
+      api.getSinglePosition(input.symbol),
+      api.getOpenPositions(),
       getRiskLimits(userId),
     ]);
   } catch (e) {
+    const info = brokerErrorInfo(e);
     return fail(
       502,
-      e instanceof BitgetError
-        ? e.toVietnamese()
-        : "Không lấy được số dư / vị thế hiện tại.",
+      info?.message ?? "Không lấy được số dư / vị thế hiện tại.",
       "validate",
-      e instanceof BitgetError ? e.code : undefined,
+      info?.code,
     );
   }
 
@@ -424,7 +449,7 @@ export async function POST(req: Request) {
       data: {
         userId,
         tradeJournalId: input.tradeJournalId,
-        broker: "BITGET",
+        broker: input.broker,
         clientOid,
         attempt,
         status: "PENDING",
@@ -478,7 +503,7 @@ export async function POST(req: Request) {
   };
 
   // 14. setLeverage. When a position is already open we must NOT change
-  //     leverage (Bitget rejects with 40914) — the add inherits the
+  //     leverage (Bitget 40914 / Binance behavior) — the add inherits the
   //     existing leverage, which the margin/liq checks above already used
   //     (effectiveLeverage). Only call setLeverage when there's no open
   //     position, or the requested leverage already matches.
@@ -491,105 +516,84 @@ export async function POST(req: Request) {
     });
   } else {
     try {
-      await setLeverage(creds, {
+      await api.setLeverage({
         symbol: input.symbol,
         leverage: input.leverage,
-        marginCoin: "USDT",
-        productType: "USDT-FUTURES",
-        ...(input.marginMode === "isolated"
-          ? { holdSide: direction === "LONG" ? "long" : "short" }
-          : {}),
+        marginMode: input.marginMode,
+        direction,
       });
     } catch (e) {
-      const code = e instanceof BitgetError ? e.code : undefined;
+      const info = brokerErrorInfo(e);
       const msg =
-        e instanceof BitgetError
-          ? e.toVietnamese()
-          : e instanceof Error
-            ? e.message
-            : "Không đặt được đòn bẩy.";
-      const raw =
-        e instanceof BitgetError
-          ? { code: e.code, msg: e.bitgetMsg }
-          : undefined;
-      return finalizeFailure("set_leverage", code, msg, raw);
+        info?.message ??
+        (e instanceof Error ? e.message : "Không đặt được đòn bẩy.");
+      return finalizeFailure(
+        "set_leverage",
+        info?.code,
+        msg,
+        info ? { code: info.code, msg: info.message } : undefined,
+      );
     }
   }
 
-  // 15. Place the order.
-  let placeResult: Awaited<ReturnType<typeof placeOrder>>;
+  // 15. Place the entry (+ SL/TP: Bitget presets w/ read-back verify,
+  //     Binance bracket orders) — one adapter call.
+  let placeResult: Awaited<ReturnType<BrokerApi["placeEntry"]>>;
   try {
-    placeResult = await placeOrder(creds, {
+    placeResult = await api.placeEntry({
       symbol: input.symbol,
-      productType: "USDT-FUTURES",
-      marginCoin: "USDT",
-      marginMode: input.marginMode,
       side,
       orderType: input.orderType,
       size: sizeString,
       price: priceString ?? undefined,
       clientOid,
-      presetStopLossPrice: slString,
-      presetStopSurplusPrice: tpString,
+      stopLoss: slString,
+      takeProfit: tpString,
+      marginMode: input.marginMode,
     });
   } catch (e) {
-    // A BitgetError means Bitget replied with a business rejection → the
-    // order was definitively NOT placed → FAILED. Any other error (fetch
-    // timeout via AbortSignal, socket reset, DNS, 5xx) means we never got a
-    // definitive answer — the order MAY have been accepted. Mark UNKNOWN so
-    // the reconciler re-checks it by clientOid instead of assuming failure.
-    const isBusinessReject = e instanceof BitgetError;
-    const code = isBusinessReject ? (e as BitgetError).code : undefined;
+    // A broker error means a definitive business rejection → the order was
+    // NOT placed → FAILED. Any other error (fetch timeout, socket reset,
+    // DNS, 5xx) means we never got a definitive answer — the order MAY have
+    // been accepted. Mark UNKNOWN so the reconciler re-checks by clientOid.
+    const info = brokerErrorInfo(e);
     const sentBody = {
+      broker: input.broker,
       symbol: input.symbol,
       side,
       size: sizeString,
       price: priceString,
       orderType: input.orderType,
       marginMode: input.marginMode,
-      presetStopLossPrice: slString,
-      presetStopSurplusPrice: tpString,
+      stopLoss: slString,
+      takeProfit: tpString,
       leverage: effectiveLeverage,
     };
-    if (isBusinessReject) {
-      const msg = (e as BitgetError).toVietnamese();
-      return finalizeFailure("place_order", code, msg, {
-        code: (e as BitgetError).code,
-        msg: (e as BitgetError).bitgetMsg,
+    if (isBrokerReject(e) && info) {
+      return finalizeFailure("place_order", info.code, info.message, {
+        code: info.code,
+        msg: info.message,
         sentBody,
       });
     }
     // Ambiguous outcome.
     const msg =
       e instanceof Error && e.name === "TimeoutError"
-        ? "Bitget không phản hồi kịp — lệnh CÓ THỂ đã vào. Kiểm tra app Bitget; hệ thống sẽ tự đối soát."
+        ? `${brokerName} không phản hồi kịp — lệnh CÓ THỂ đã vào. Kiểm tra app ${brokerName}; hệ thống sẽ tự đối soát.`
         : e instanceof Error
           ? `Lỗi mạng khi đặt lệnh: ${e.message}. Lệnh có thể đã vào — hệ thống sẽ tự đối soát.`
           : "Lỗi không xác định khi đặt lệnh — hệ thống sẽ tự đối soát.";
     return finalizeFailure(
       "place_order",
-      code,
+      info?.code,
       msg,
       { networkError: true, sentBody },
       "UNKNOWN",
     );
   }
 
-  // 16. Verify SL actually registered (best-effort).
-  let slVerified: boolean | null = null;
-  let detail: Awaited<ReturnType<typeof getOrderDetail>> = null;
-  if (slString) {
-    try {
-      detail = await getOrderDetail(creds, {
-        symbol: input.symbol,
-        orderId: placeResult.result.orderId,
-      });
-      slVerified = !!detail?.presetStopLossPrice;
-    } catch {
-      slVerified = null; // network blip; flag for reconciliation
-    }
-  }
-
+  // 16. SL-attached verdict comes from the adapter (per-broker semantics).
+  const slVerified = placeResult.slAttached;
   const finalStatus =
     slString && slVerified === false ? "PLACED_NO_SL" : "PLACED";
 
@@ -597,12 +601,12 @@ export async function POST(req: Request) {
     where: { id: orderRow.id },
     data: {
       status: finalStatus,
-      externalOrderId: placeResult.result.orderId,
+      externalOrderId: placeResult.orderId,
       rawResponse: placeResult.raw as object,
       errorStage: finalStatus === "PLACED_NO_SL" ? "verify_sl" : null,
       errorMessage:
         finalStatus === "PLACED_NO_SL"
-          ? "Lệnh đã vào nhưng Bitget không gắn SL. Đặt SL thủ công trên app Bitget ngay."
+          ? `Lệnh đã vào nhưng ${brokerName} không gắn SL. Đặt SL thủ công trên app ${brokerName} ngay.`
           : null,
     },
   });
@@ -610,9 +614,10 @@ export async function POST(req: Request) {
   return NextResponse.json({
     ok: true,
     data: {
-      orderId: placeResult.result.orderId,
+      orderId: placeResult.orderId,
       clientOid,
       brokerOrderRowId: orderRow.id,
+      broker: input.broker,
       status: finalStatus,
       normalizedSize: sizeString,
       normalizedPrice: priceString,
@@ -620,7 +625,7 @@ export async function POST(req: Request) {
       slVerified,
       warning:
         finalStatus === "PLACED_NO_SL"
-          ? "Bitget không xác nhận SL. Kiểm tra app Bitget và đặt SL ngay."
+          ? `${brokerName} không xác nhận SL. Kiểm tra app ${brokerName} và đặt SL ngay.`
           : null,
     },
   });

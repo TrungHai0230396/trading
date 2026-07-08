@@ -648,6 +648,10 @@ export type BitgetClosedPosition = {
   closeAvgPrice: number;
   /** Realized PnL in USDT, fees included. */
   netProfit: number;
+  /** Total fees (open + close, always reported positive here). */
+  totalFee: number;
+  /** Total funding paid/received over the position's life. */
+  totalFunding: number;
   closedAt: Date;
   openedAt: Date;
 };
@@ -678,6 +682,9 @@ export async function getPositionHistory(
       openAvgPrice: string;
       closeAvgPrice: string;
       netProfit: string;
+      openFee?: string;
+      closeFee?: string;
+      totalFunding?: string;
       utime: string;
       ctime: string;
     }>;
@@ -688,12 +695,19 @@ export async function getPositionHistory(
     query,
   );
   const rows = data.list ?? [];
+  const num = (v?: string): number => {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : 0;
+  };
   return rows.map((r) => ({
     symbol: r.symbol,
     holdSide: r.holdSide,
     openAvgPrice: Number(r.openAvgPrice),
     closeAvgPrice: Number(r.closeAvgPrice),
     netProfit: Number(r.netProfit),
+    // Bitget reports fees as negative amounts; store the magnitude.
+    totalFee: Math.abs(num(r.openFee)) + Math.abs(num(r.closeFee)),
+    totalFunding: num(r.totalFunding),
     openedAt: new Date(Number(r.ctime)),
     closedAt: new Date(Number(r.utime)),
   }));
