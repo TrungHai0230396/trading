@@ -4,24 +4,41 @@ services:
     container_name: tranding-mysql
     restart: unless-stopped
     environment:
-      MYSQL_ROOT_PASSWORD: rootpass
-      MYSQL_DATABASE: tranding
-      MYSQL_USER: tranding
-      MYSQL_PASSWORD: tranding
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-rootpass}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-tranding}
+      MYSQL_USER: ${MYSQL_USER:-tranding}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-tranding}
     command:
       - --character-set-server=utf8mb4
       - --collation-server=utf8mb4_unicode_ci
     ports:
-      - "3306:3306"
+      # Bind to LOCALHOST only — reachable by host-side prisma migrate/studio
+      # but NOT from the public internet. (Was 0.0.0.0:3306, which exposed
+      # the DB to anyone who could reach the host IP.)
+      - "127.0.0.1:3306:3306"
     volumes:
       - mysql-data:/var/lib/mysql
       - ./docker/mysql-init.sql:/docker-entrypoint-initdb.d/01-grant.sql:ro
     healthcheck:
       test:
-        ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-prootpass"]
+        [
+          "CMD",
+          "mysqladmin",
+          "ping",
+          "-h",
+          "localhost",
+          "-u",
+          "root",
+          "-p${MYSQL_ROOT_PASSWORD:-rootpass}",
+        ]
       interval: 5s
       timeout: 5s
       retries: 20
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   app:
     build:
@@ -34,12 +51,43 @@ services:
         condition: service_healthy
     env_file: .env
     environment:
-      # Override .env so the container talks to the mysql service, not localhost.
-      DATABASE_URL: "mysql://tranding:tranding@mysql:3306/tranding"
+      # Container talks to the mysql SERVICE (not localhost); URL built from
+      # the same MYSQL_* vars so a prod password change flows through here.
+      DATABASE_URL: "mysql://${MYSQL_USER:-tranding}:${MYSQL_PASSWORD:-tranding}@mysql:3306/${MYSQL_DATABASE:-tranding}"
       NODE_ENV: production
       AUTH_TRUST_HOST: "true"
     ports:
       - "3000:3000"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  # Nightly DB backup → ./backups (kept DB_BACKUP_KEEP_DAYS days). Uses the
+  # same mysql image so mysqldump versions match the server.
+  db-backup:
+    image: mysql:8.4
+    container_name: tranding-db-backup
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      MYSQL_HOST: mysql
+      MYSQL_USER: root
+      MYSQL_PASSWORD: ${MYSQL_ROOT_PASSWORD:-rootpass}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-tranding}
+      DB_BACKUP_KEEP_DAYS: ${DB_BACKUP_KEEP_DAYS:-7}
+    entrypoint: ["/bin/sh", "/backup.sh"]
+    volumes:
+      - ./docker/backup.sh:/backup.sh:ro
+      - ./backups:/backups
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
 
 volumes:
   mysql-data:
