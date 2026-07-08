@@ -30,6 +30,16 @@ export const googleEnabled = Boolean(
   process.env.AUTH_GOOGLE_ID && process.env.AUTH_GOOGLE_SECRET,
 );
 
+/**
+ * Google-ONLY mode: the email/password forms are hidden and password
+ * registration is closed, so Google is the sole way in. Requires Google
+ * to actually be configured (else nobody could log in). In this mode the
+ * account-takeover guard is unnecessary — no password account can be
+ * created — so Google safely auto-links into any pre-existing account.
+ */
+export const googleOnly =
+  googleEnabled && process.env.AUTH_GOOGLE_ONLY === "true";
+
 export const { handlers, signIn, signOut, auth } = NextAuth({
   session: { strategy: "jwt" },
   pages: { signIn: "/login" },
@@ -90,7 +100,11 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
       // Refuse; the owner can link Google later from inside Settings once
       // authenticated. A Google-only account (no passwordHash) is our own
       // prior Google signup → safe to sign back into.
-      if (existing && existing.passwordHash) {
+      //
+      // In googleOnly mode this vector doesn't exist (no password signups),
+      // so we auto-link freely — otherwise the owner's own legacy password
+      // account would lock them out.
+      if (!googleOnly && existing && existing.passwordHash) {
         return "/login?error=use_password";
       }
 

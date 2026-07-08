@@ -13,22 +13,27 @@ import { Button } from "@/components/ui/button";
 export function GoogleLoginButton({
   enabled,
   callbackUrl = "/",
+  standalone = false,
 }: {
   enabled: boolean;
   callbackUrl?: string;
+  /** When true this is the ONLY auth method — omit the "hoặc" divider. */
+  standalone?: boolean;
 }) {
   const [pending, setPending] = React.useState(false);
   if (!enabled) return null;
 
   return (
     <div className="space-y-3">
-      <div className="flex items-center gap-3">
-        <span className="h-px flex-1 bg-border" />
-        <span className="text-[11px] uppercase tracking-wider text-muted-foreground">
-          hoặc
-        </span>
-        <span className="h-px flex-1 bg-border" />
-      </div>
+      {standalone ? null : (
+        <div className="flex items-center gap-3">
+          <span className="h-px flex-1 bg-border" />
+          <span className="text-[11px] uppercase tracking-wider text-muted-foreground">
+            hoặc
+          </span>
+          <span className="h-px flex-1 bg-border" />
+        </div>
+      )}
       <Button
         type="button"
         variant="outline"

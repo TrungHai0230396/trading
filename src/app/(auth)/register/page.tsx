@@ -1,11 +1,16 @@
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import { RegisterForm } from "./register-form";
-import { googleEnabled } from "@/lib/auth";
+import { googleEnabled, googleOnly } from "@/lib/auth";
 
 // Per-request render — see login/page.tsx (build-time env is empty).
 export const dynamic = "force-dynamic";
 
 export default function RegisterPage() {
+  // In Google-only mode there is no separate sign-up: the Google button on
+  // /login creates the account on first use. Send users there.
+  if (googleOnly) redirect("/login");
+
   return (
     <div className="space-y-6">
       <div className="space-y-1">

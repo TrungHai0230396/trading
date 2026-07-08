@@ -20,8 +20,10 @@ type FormValues = z.infer<typeof schema>;
 
 export function LoginForm({
   googleEnabled = false,
+  googleOnly = false,
 }: {
   googleEnabled?: boolean;
+  googleOnly?: boolean;
 }) {
   const router = useRouter();
   const params = useSearchParams();
@@ -61,6 +63,20 @@ export function LoginForm({
     router.push(callbackUrl);
     router.refresh();
   });
+
+  // Google-only: no email/password form, just the Google button (standalone,
+  // no "hoặc" divider since there's nothing above it).
+  if (googleOnly) {
+    return (
+      <div className="space-y-3">
+        <GoogleLoginButton
+          enabled={googleEnabled}
+          callbackUrl={callbackUrl}
+          standalone
+        />
+      </div>
+    );
+  }
 
   return (
     <form className="space-y-4" onSubmit={onSubmit} noValidate>

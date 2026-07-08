@@ -8,7 +8,7 @@ import {
 } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
-import { auth } from "@/lib/auth";
+import { auth, googleOnly } from "@/lib/auth";
 import {
   BinanceBrokerCard,
   BitgetBrokerCard,
@@ -136,7 +136,8 @@ export default async function SettingsPage() {
               </div>
             </CardContent>
           </Card>
-          <ChangePasswordCard />
+          {/* No password to change when Google is the only login method. */}
+          {googleOnly ? null : <ChangePasswordCard />}
         </TabsContent>
 
         <TabsContent value="preferences" className="mt-4">

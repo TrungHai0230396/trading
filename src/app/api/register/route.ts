@@ -52,6 +52,18 @@ function clientIp(req: Request): string {
 }
 
 export async function POST(req: Request) {
+  // Google-only mode: no password signups at all (closes the account-
+  // takeover-by-unverified-email vector entirely).
+  const googleOnly =
+    process.env.AUTH_GOOGLE_ONLY === "true" &&
+    Boolean(process.env.AUTH_GOOGLE_ID && process.env.AUTH_GOOGLE_SECRET);
+  if (googleOnly) {
+    return NextResponse.json(
+      { error: "Chỉ hỗ trợ đăng nhập bằng Google." },
+      { status: 403 },
+    );
+  }
+
   if (!registrationAllowed()) {
     return NextResponse.json(
       { error: "Tính năng đăng ký đang tạm đóng." },

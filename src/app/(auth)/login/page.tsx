@@ -1,7 +1,7 @@
 import { Suspense } from "react";
 import Link from "next/link";
 import { LoginForm } from "./login-form";
-import { googleEnabled } from "@/lib/auth";
+import { googleEnabled, googleOnly } from "@/lib/auth";
 
 // Evaluated per-request, not baked at build time — the Docker builder has
 // no AUTH_GOOGLE_* env, so a static prerender would freeze the Google
@@ -18,17 +18,23 @@ export default function LoginPage() {
         </p>
       </div>
       <Suspense fallback={<div className="h-[260px]" />}>
-        <LoginForm googleEnabled={googleEnabled} />
+        <LoginForm googleEnabled={googleEnabled} googleOnly={googleOnly} />
       </Suspense>
-      <p className="text-xs text-muted-foreground">
-        Lần đầu sử dụng?{" "}
-        <Link
-          href="/register"
-          className="font-medium text-primary hover:underline"
-        >
-          Tạo tài khoản
-        </Link>
-      </p>
+      {googleOnly ? (
+        <p className="text-xs text-muted-foreground">
+          Đăng nhập bằng Google — tài khoản tạo tự động lần đầu.
+        </p>
+      ) : (
+        <p className="text-xs text-muted-foreground">
+          Lần đầu sử dụng?{" "}
+          <Link
+            href="/register"
+            className="font-medium text-primary hover:underline"
+          >
+            Tạo tài khoản
+          </Link>
+        </p>
+      )}
     </div>
   );
 }
