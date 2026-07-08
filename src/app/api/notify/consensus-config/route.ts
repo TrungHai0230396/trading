@@ -20,10 +20,11 @@ const Body = z.object({
   enabled: z.boolean(),
   timeframes: z
     .array(z.string().refine(isTimeframe, { message: "Timeframe không hợp lệ" }))
-    .min(2, "Chọn ít nhất 2 khung — 1 khung thì không còn là “đồng thuận”.")
+    .min(1, "Chọn ít nhất 1 khung.")
     .max(7),
   notifyBullish: z.boolean(),
   notifyBearish: z.boolean(),
+  notifyBreak: z.boolean().default(true),
 }).refine((b) => b.notifyBullish || b.notifyBearish, {
   message: "Phải bật ít nhất một hướng (Bullish hoặc Bearish).",
 });

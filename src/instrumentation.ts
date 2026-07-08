@@ -15,6 +15,7 @@
 
 const SYNC_INTERVAL_MS = 2 * 60_000;
 const CONSENSUS_INTERVAL_MS = 15 * 60_000;
+const NEWS_INTERVAL_MS = 60 * 60_000;
 
 // Guard against double-registration (dev HMR re-runs register()).
 declare global {
@@ -67,7 +68,27 @@ export async function register() {
     }
   }, CONSENSUS_INTERVAL_MS);
 
+  const { runNewsRefreshForAllUsers } = await import(
+    "@/lib/cron/news-refresh"
+  );
+  let newsRunning = false;
+  const newsTick = async () => {
+    if (newsRunning) return;
+    newsRunning = true;
+    try {
+      await runNewsRefreshForAllUsers();
+    } catch (e) {
+      console.error("[cron:news] tick failed", e);
+    } finally {
+      newsRunning = false;
+    }
+  };
+  setInterval(newsTick, NEWS_INTERVAL_MS);
+  // Prime once shortly after boot so a fresh deploy isn't news-empty for
+  // a full hour.
+  setTimeout(newsTick, 90_000);
+
   console.log(
-    `[cron] started: broker-sync every ${SYNC_INTERVAL_MS / 60000}m, consensus-scan every ${CONSENSUS_INTERVAL_MS / 60000}m`,
+    `[cron] started: broker-sync every ${SYNC_INTERVAL_MS / 60000}m, consensus-scan every ${CONSENSUS_INTERVAL_MS / 60000}m, news-refresh every ${NEWS_INTERVAL_MS / 60000}m`,
   );
 }

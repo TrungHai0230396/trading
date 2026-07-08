@@ -19,7 +19,11 @@ export async function runBrokerSyncForAllUsers(): Promise<void> {
   let userIds: string[] = [];
   try {
     const rows = await db.apiKey.findMany({
-      where: { kind: "BITGET", isActive: true, label: null },
+      where: {
+        kind: { in: ["BITGET", "BINANCE"] },
+        isActive: true,
+        label: null,
+      },
       select: { userId: true },
     });
     userIds = [...new Set(rows.map((r) => r.userId))];
