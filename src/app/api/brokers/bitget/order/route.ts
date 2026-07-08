@@ -597,17 +597,38 @@ export async function POST(req: Request) {
   const finalStatus =
     slString && slVerified === false ? "PLACED_NO_SL" : "PLACED";
 
+  // A rejected TP doesn't downgrade status (position is still SL-protected)
+  // but must not pass silently — the journal would claim a TP that isn't
+  // on the exchange.
+  const tpRejected = placeResult.tpRejected;
+  const noteParts: string[] = [];
+  if (finalStatus === "PLACED_NO_SL") {
+    noteParts.push(
+      `Lệnh đã vào nhưng ${brokerName} không gắn SL. Đặt SL thủ công trên app ${brokerName} ngay.`,
+    );
+  }
+  if (tpRejected) {
+    noteParts.push(
+      `${brokerName} không gắn được Take Profit — đặt lại TP thủ công nếu cần.`,
+    );
+  }
+
   await db.brokerOrder.update({
     where: { id: orderRow.id },
     data: {
       status: finalStatus,
       externalOrderId: placeResult.orderId,
       rawResponse: placeResult.raw as object,
-      errorStage: finalStatus === "PLACED_NO_SL" ? "verify_sl" : null,
-      errorMessage:
+      // Clear the preset TP we thought we sent if the broker rejected it,
+      // so the panel doesn't show a phantom TP.
+      ...(tpRejected ? { presetTakeProfit: null } : {}),
+      errorStage:
         finalStatus === "PLACED_NO_SL"
-          ? `Lệnh đã vào nhưng ${brokerName} không gắn SL. Đặt SL thủ công trên app ${brokerName} ngay.`
-          : null,
+          ? "verify_sl"
+          : tpRejected
+            ? "verify_tp"
+            : null,
+      errorMessage: noteParts.length > 0 ? noteParts.join(" ") : null,
     },
   });
 
@@ -624,8 +645,8 @@ export async function POST(req: Request) {
       estimatedLiq: liq,
       slVerified,
       warning:
-        finalStatus === "PLACED_NO_SL"
-          ? `${brokerName} không xác nhận SL. Kiểm tra app ${brokerName} và đặt SL ngay.`
+        noteParts.length > 0
+          ? noteParts.join(" ")
           : null,
     },
   });

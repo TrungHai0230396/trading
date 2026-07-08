@@ -78,12 +78,22 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
   callbacks: {
     async signIn({ user, account }) {
       if (account?.provider !== "google") return true;
-      // Google guarantees verified emails, so linking-by-email is safe:
-      // an existing credentials account with the same mailbox simply gains
-      // Google as a second way in; a new mailbox gets a fresh account.
       const email = user.email?.trim().toLowerCase();
       if (!email) return false;
       const existing = await db.user.findUnique({ where: { email } });
+
+      // Account-takeover guard: registration does NOT verify email
+      // ownership, so a pre-existing PASSWORD account for this mailbox may
+      // have been created by someone who doesn't own the inbox. Auto-
+      // linking Google into it would hand the real Google owner an
+      // attacker-controlled account (which still has password access).
+      // Refuse; the owner can link Google later from inside Settings once
+      // authenticated. A Google-only account (no passwordHash) is our own
+      // prior Google signup → safe to sign back into.
+      if (existing && existing.passwordHash) {
+        return "/login?error=use_password";
+      }
+
       if (!existing) {
         const created = await db.user.create({
           data: {

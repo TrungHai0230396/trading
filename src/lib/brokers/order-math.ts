@@ -13,12 +13,23 @@
  * round up — we don't want to send more than the user authorized) and
  * for price on limit orders (so the price is valid on the order book).
  */
+/**
+ * value/step, corrected for binary-float drift before the caller floors/
+ * ceils it. Without this, an EXACT multiple like 8.2/0.1 evaluates to
+ * 81.99999999999999, and Math.floor drops a whole step → the user's 8.2
+ * becomes 8.1. Rounding the quotient to 9 decimals collapses that drift
+ * without affecting genuinely fractional quotients.
+ */
+function quotient(value: number, step: number): number {
+  return Number((value / step).toFixed(9));
+}
+
 export function floorToStep(value: number, step: number): number {
   if (!Number.isFinite(value) || !Number.isFinite(step) || step <= 0) {
     return value;
   }
-  const n = Math.floor(value / step) * step;
-  // Re-snap to step's decimals to kill float drift like 0.30000000000000004.
+  const n = Math.floor(quotient(value, step)) * step;
+  // Re-snap to step's decimals to kill multiplication drift.
   return Number(n.toFixed(stepDecimals(step)));
 }
 
@@ -30,7 +41,7 @@ export function roundToStep(value: number, step: number): number {
   if (!Number.isFinite(value) || !Number.isFinite(step) || step <= 0) {
     return value;
   }
-  const n = Math.round(value / step) * step;
+  const n = Math.round(quotient(value, step)) * step;
   return Number(n.toFixed(stepDecimals(step)));
 }
 
@@ -39,7 +50,7 @@ export function ceilToStep(value: number, step: number): number {
   if (!Number.isFinite(value) || !Number.isFinite(step) || step <= 0) {
     return value;
   }
-  const n = Math.ceil(value / step) * step;
+  const n = Math.ceil(quotient(value, step)) * step;
   return Number(n.toFixed(stepDecimals(step)));
 }
 

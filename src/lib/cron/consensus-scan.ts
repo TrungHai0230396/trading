@@ -112,6 +112,14 @@ export async function runConsensusScanForAllUsers(): Promise<void> {
             limit: 300,
             persist: false,
           });
+          // scanSymbol swallows a per-TF kline failure as a NEUTRAL entry
+          // with `.error` set — which would drop bullishCount below the
+          // threshold and fire a FALSE "lost consensus" break. If ANY TF
+          // errored the scan is inconclusive: carry prev state, no alert.
+          if (entry.perTF.some((t) => t.error)) {
+            if (!isNew) nextState[stateKey] = prev;
+            continue;
+          }
           const now: "BULL" | "BEAR" | "NONE" =
             entry.alignment === "BULLISH" && entry.bullishCount === tfs.length
               ? "BULL"

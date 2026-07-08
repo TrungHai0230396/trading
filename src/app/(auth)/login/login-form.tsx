@@ -28,6 +28,17 @@ export function LoginForm({
   const callbackUrl = params.get("callbackUrl") ?? "/";
   const [pending, setPending] = React.useState(false);
 
+  // Google sign-in was refused because a password account already exists
+  // for that email (see auth.ts account-takeover guard).
+  React.useEffect(() => {
+    if (params.get("error") === "use_password") {
+      toast.error(
+        "Email này đã đăng ký bằng mật khẩu. Hãy đăng nhập bằng mật khẩu.",
+        { duration: 8000 },
+      );
+    }
+  }, [params]);
+
   const {
     register,
     handleSubmit,

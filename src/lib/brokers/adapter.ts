@@ -40,6 +40,8 @@ export type PlaceEntryResult = {
   orderId: string;
   raw: unknown;
   slAttached: boolean | null;
+  /** false only when a TP was requested but the broker rejected it. */
+  tpRejected: boolean;
 };
 
 export type BrokerApi = {
@@ -116,10 +118,25 @@ export async function getBrokerApi(
             slAttached = null; // network blip — reconciler will check
           }
         }
+        // Bitget presets TP on the entry; a dropped TP surfaces the same
+        // way as SL. Verify only when requested.
+        let tpRejected = false;
+        if (a.takeProfit && slAttached !== null) {
+          try {
+            const detail = await bitget.getOrderDetail(creds, {
+              symbol: a.symbol,
+              orderId: placed.result.orderId,
+            });
+            tpRejected = !detail?.presetStopSurplusPrice;
+          } catch {
+            /* leave false — inconclusive; reconciler covers it */
+          }
+        }
         return {
           orderId: placed.result.orderId,
           raw: placed.raw,
           slAttached,
+          tpRejected,
         };
       },
     };
@@ -155,6 +172,7 @@ export async function getBrokerApi(
         orderId: placed.orderId,
         raw: placed.raw,
         slAttached: a.stopLoss ? (placed.slAttached ?? false) : null,
+        tpRejected: a.takeProfit ? placed.tpAttached === false : false,
       };
     },
   };

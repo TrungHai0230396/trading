@@ -343,6 +343,8 @@ export type BinanceEntryResult = {
   tpOrderId?: string;
   /** whether the SL bracket landed (undefined when none requested) */
   slAttached?: boolean;
+  /** whether the TP bracket landed (undefined when none requested) */
+  tpAttached?: boolean;
   raw: unknown;
 };
 
@@ -394,11 +396,16 @@ export async function placeOrderWithBrackets(
     raw: { entry },
   };
 
+  // Returns { attached, orderId }. A BinanceError is a definitive reject →
+  // not attached. Any OTHER error (timeout / socket / 5xx) is ambiguous —
+  // the bracket MAY be live, so we re-query open brackets to recover its
+  // real orderId (else it becomes an unsweepable orphan closePosition stop
+  // that can market-flatten a future unrelated position on this symbol).
   const placeBracket = async (
     type: "STOP_MARKET" | "TAKE_PROFIT_MARKET",
     stopPrice: string,
     tag: "sl" | "tp",
-  ): Promise<string | null> => {
+  ): Promise<{ attached: boolean; orderId: string | null }> => {
     try {
       const b = await signedRequest<{ orderId: number }>(
         creds,
@@ -414,24 +421,38 @@ export async function placeOrderWithBrackets(
           newClientOrderId: `${input.clientOid}_${tag}`.slice(0, 36),
         },
       );
-      return String(b.orderId);
-    } catch {
-      return null;
+      return { attached: true, orderId: String(b.orderId) };
+    } catch (e) {
+      if (e instanceof BinanceError) {
+        return { attached: false, orderId: null }; // definitive reject
+      }
+      // Ambiguous — did it land? Ask the exchange.
+      try {
+        const open = await getOpenBrackets(creds, input.symbol);
+        const found = open.find((o) => o.type === type);
+        if (found) return { attached: true, orderId: found.orderId };
+      } catch {
+        /* fall through */
+      }
+      // Genuinely unknown: report NOT attached (surfaces the warning) but
+      // with no orderId — safer than claiming success.
+      return { attached: false, orderId: null };
     }
   };
 
   if (input.stopLossPrice) {
-    const id = await placeBracket("STOP_MARKET", input.stopLossPrice, "sl");
-    result.slOrderId = id ?? undefined;
-    result.slAttached = id !== null;
+    const r = await placeBracket("STOP_MARKET", input.stopLossPrice, "sl");
+    result.slOrderId = r.orderId ?? undefined;
+    result.slAttached = r.attached;
   }
   if (input.takeProfitPrice) {
-    const id = await placeBracket(
+    const r = await placeBracket(
       "TAKE_PROFIT_MARKET",
       input.takeProfitPrice,
       "tp",
     );
-    result.tpOrderId = id ?? undefined;
+    result.tpOrderId = r.orderId ?? undefined;
+    result.tpAttached = r.attached;
   }
   result.raw = {
     entry,
@@ -523,9 +544,12 @@ export async function getOpenBrackets(
 }
 
 /**
- * Replace the position-level SL or TP: cancel any existing bracket of the
- * same type, then place a fresh closePosition stop. Mirrors Bitget's
- * idempotent pos_loss/pos_profit semantics.
+ * Replace the position-level SL or TP. ORDER MATTERS: place the new stop
+ * FIRST, then cancel the old one(s). If the new order is rejected (e.g.
+ * -2021 "would immediately trigger", precision), the OLD stop is left
+ * untouched — the position never rides unprotected. (Cancel-then-place
+ * would strand it on any rejection.) Emulates Bitget's atomic
+ * pos_loss/pos_profit replace as closely as a two-call API allows.
  */
 export async function replacePositionStop(
   creds: BinanceCreds,
@@ -537,15 +561,16 @@ export async function replacePositionStop(
   },
 ): Promise<{ orderId: string }> {
   const type = args.kind === "sl" ? "STOP_MARKET" : "TAKE_PROFIT_MARKET";
-  const existing = await getOpenBrackets(creds, args.symbol);
-  for (const b of existing.filter((x) => x.type === type)) {
-    try {
-      await cancelOrder(creds, { symbol: args.symbol, orderId: b.orderId });
-    } catch {
-      /* already gone */
-    }
-  }
   const closeSide = args.positionSide === "long" ? "SELL" : "BUY";
+
+  // Snapshot existing brackets BEFORE placing, so we know exactly which to
+  // remove afterward (and don't accidentally cancel our own new order).
+  const before = (await getOpenBrackets(creds, args.symbol)).filter(
+    (x) => x.type === type,
+  );
+
+  // Place new first — this is the throwing call. On failure the old stop
+  // survives and the error propagates to the caller unchanged.
   const d = await signedRequest<{ orderId: number }>(
     creds,
     "POST",
@@ -559,7 +584,16 @@ export async function replacePositionStop(
       workingType: "MARK_PRICE",
     },
   );
-  return { orderId: String(d.orderId) };
+  const newId = String(d.orderId);
+
+  // New stop is live — now retire the previous ones (best-effort).
+  for (const b of before) {
+    if (b.orderId === newId) continue;
+    await cancelOrder(creds, { symbol: args.symbol, orderId: b.orderId }).catch(
+      () => {},
+    );
+  }
+  return { orderId: newId };
 }
 
 /**

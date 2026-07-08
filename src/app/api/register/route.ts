@@ -38,10 +38,17 @@ function registrationAllowed(): boolean {
 }
 
 function clientIp(req: Request): string {
-  // Single-container deploys may sit behind a reverse proxy later —
-  // x-forwarded-for first, then fall back to a shared bucket.
-  const xf = req.headers.get("x-forwarded-for");
-  return xf?.split(",")[0]?.trim() || "unknown";
+  // x-forwarded-for is client-controlled unless a trusted reverse proxy
+  // overwrites it. Only trust it when TRUST_PROXY=true (set that ONLY once
+  // a proxy that strips inbound XFF is in front). Otherwise a scripted
+  // attacker rotates the header to dodge the per-IP limit entirely, so we
+  // fall back to a single shared bucket — the limit then applies globally,
+  // which is strict but not bypassable.
+  if (process.env.TRUST_PROXY === "true") {
+    const xf = req.headers.get("x-forwarded-for");
+    if (xf) return xf.split(",")[0]?.trim() || "unknown";
+  }
+  return "shared";
 }
 
 export async function POST(req: Request) {
@@ -53,9 +60,14 @@ export async function POST(req: Request) {
   }
 
   const ip = clientIp(req);
-  if (!rateLimit(`register:${ip}`, 5, 60 * 60_000)) {
+  // Per-real-IP: strict (5/hr). Shared fallback (no trusted proxy): a
+  // higher global backstop that throttles a signup flood without blocking
+  // a normal launch day. Real per-IP limiting kicks in once TRUST_PROXY=true.
+  const [maxReg, regWindow] =
+    ip === "shared" ? [60, 60 * 60_000] : [5, 60 * 60_000];
+  if (!rateLimit(`register:${ip}`, maxReg, regWindow)) {
     return NextResponse.json(
-      { error: "Quá nhiều lần đăng ký từ địa chỉ này. Thử lại sau 1 giờ." },
+      { error: "Quá nhiều lượt đăng ký lúc này. Thử lại sau ít phút." },
       { status: 429 },
     );
   }
@@ -91,10 +103,29 @@ export async function POST(req: Request) {
     );
   }
 
-  const user = await db.user.create({
-    data: { name, email, passwordHash },
-    select: { id: true, email: true, name: true },
-  });
+  // The check above is a fast path; the unique index is the real guard.
+  // Two concurrent same-email requests both pass findUnique, so the loser
+  // hits P2002 — turn that into a clean 409 instead of a 500.
+  let user: { id: string; email: string; name: string | null };
+  try {
+    user = await db.user.create({
+      data: { name, email, passwordHash },
+      select: { id: true, email: true, name: true },
+    });
+  } catch (e) {
+    if (
+      e &&
+      typeof e === "object" &&
+      "code" in e &&
+      (e as { code?: string }).code === "P2002"
+    ) {
+      return NextResponse.json(
+        { error: "Email này đã được đăng ký." },
+        { status: 409 },
+      );
+    }
+    throw e;
+  }
 
   // Evidence of consent — commercial requirement for a trading tool.
   await db.appSetting.create({
