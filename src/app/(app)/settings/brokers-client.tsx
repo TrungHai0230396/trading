@@ -514,8 +514,10 @@ function BitgetGuide() {
           sàn không hiện lại).
         </li>
         <li>
-          Permissions: tick <strong>Read-only</strong> + <strong>Trade</strong>.
-          KHÔNG tick <strong>Transfer</strong> hay <strong>Withdraw</strong>.
+          Permissions: chỉ cần quyền <strong>ĐỌC</strong> (Futures → Orders +
+          Holdings) — đủ để app tự đồng bộ lệnh khớp/đóng và PnL vào nhật
+          ký. KHÔNG tick <strong>Trade/Transfer/Withdraw</strong> — app
+          mặc định không đặt lệnh hộ bạn.
         </li>
         <li>
           Nếu app deploy public, set IP whitelist. Nếu local, để IP máy bạn.
@@ -864,6 +866,347 @@ function MetaApiGuide() {
 }
 
 // ────────────────────────────────────────────────────────────────────
+// Binance card — same flow as Bitget, two-field creds (no passphrase)
+// ────────────────────────────────────────────────────────────────────
+
+type BinanceStatus = {
+  connected: boolean;
+  meta: {
+    apiKeyMasked?: string;
+    savedAt?: string;
+  } | null;
+};
+
+export function BinanceBrokerCard() {
+  const [status, setStatus] = React.useState<BinanceStatus | null>(null);
+  const [account, setAccount] = React.useState<BitgetAccount | null>(null);
+  const [accountError, setAccountError] = React.useState<string | null>(null);
+  const [accountLoading, setAccountLoading] = React.useState(false);
+  const [apiKey, setApiKey] = React.useState("");
+  const [secret, setSecret] = React.useState("");
+  const [showSecret, setShowSecret] = React.useState(false);
+  const [submitting, setSubmitting] = React.useState(false);
+  const [editing, setEditing] = React.useState(false);
+
+  React.useEffect(() => {
+    fetch("/api/brokers/binance/keys")
+      .then((r) => r.json())
+      .then((d: BinanceStatus) => setStatus(d))
+      .catch(() => setStatus({ connected: false, meta: null }));
+  }, []);
+
+  const refreshAccount = React.useCallback(async () => {
+    setAccountLoading(true);
+    setAccountError(null);
+    try {
+      const res = await fetch("/api/brokers/binance/account");
+      const j = await res.json();
+      if (!res.ok) {
+        setAccountError(j?.error ?? `Lỗi ${res.status}`);
+        setAccount(null);
+        return;
+      }
+      setAccount(j as BitgetAccount);
+    } catch (e) {
+      setAccountError(e instanceof Error ? e.message : "Lỗi không xác định");
+    } finally {
+      setAccountLoading(false);
+    }
+  }, []);
+
+  React.useEffect(() => {
+    if (status?.connected && !editing) refreshAccount();
+    else {
+      setAccount(null);
+      setAccountError(null);
+    }
+  }, [status?.connected, editing, refreshAccount]);
+
+  const save = async () => {
+    if (!apiKey || !secret) {
+      toast.error("Cần nhập đủ API key và Secret.");
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const res = await fetch("/api/brokers/binance/keys", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ apiKey, secret }),
+      });
+      const d = (await res.json()) as { ok?: boolean; error?: string };
+      if (!res.ok || !d.ok) {
+        toast.error(d.error ?? `Lỗi ${res.status}`);
+        return;
+      }
+      toast.success("Đã kết nối Binance Futures.");
+      setApiKey("");
+      setSecret("");
+      setEditing(false);
+      const next = await fetch("/api/brokers/binance/keys").then((r) => r.json());
+      setStatus(next as BinanceStatus);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const disconnect = async () => {
+    if (!confirm("Gỡ kết nối Binance khỏi app này?")) return;
+    setSubmitting(true);
+    try {
+      const res = await fetch("/api/brokers/binance/keys", { method: "DELETE" });
+      if (!res.ok) {
+        toast.error("Không gỡ được kết nối.");
+        return;
+      }
+      toast.success("Đã gỡ kết nối Binance.");
+      setStatus({ connected: false, meta: null });
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex items-start justify-between gap-2">
+          <div>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <PlugZap className="size-4 text-primary" />
+              Binance Futures
+            </CardTitle>
+            <CardDescription>
+              USDT-M futures. Đọc số dư + vị thế, và đặt lệnh thật tự động từ
+              Nhật ký giao dịch (chọn sàn khi đặt).
+            </CardDescription>
+          </div>
+          {status?.connected ? (
+            <Badge
+              variant="outline"
+              className="border-bullish/40 bg-bullish/10 text-bullish"
+            >
+              <CircleCheck className="size-3" />
+              Đã kết nối
+            </Badge>
+          ) : null}
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {status?.connected && !editing ? (
+          <div className="space-y-3">
+            <div className="space-y-1.5 rounded-md border bg-card/40 p-3 text-sm">
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">API key</span>
+                <span className="font-mono text-xs">
+                  {status.meta?.apiKeyMasked ?? "—"}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Lưu lúc</span>
+                <span className="text-xs">
+                  {status.meta?.savedAt
+                    ? new Date(status.meta.savedAt).toLocaleString("vi-VN")
+                    : "—"}
+                </span>
+              </div>
+            </div>
+
+            <div className="space-y-1.5 rounded-md border bg-card/40 p-3 text-sm">
+              <div className="flex items-center justify-between">
+                <span className="font-medium">Số dư USDT-M Futures</span>
+                <Button
+                  variant="ghost"
+                  size="xs"
+                  onClick={refreshAccount}
+                  disabled={accountLoading}
+                >
+                  {accountLoading ? (
+                    <Loader2 className="size-3 animate-spin" />
+                  ) : (
+                    "Làm mới"
+                  )}
+                </Button>
+              </div>
+              {accountError ? (
+                <p className="text-xs text-rose-500">{accountError}</p>
+              ) : account ? (
+                <>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Khả dụng</span>
+                    <span className="font-mono">
+                      {fmtNum(account.balance.available)} USDT
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Equity</span>
+                    <span className="font-mono">
+                      {fmtNum(account.balance.equity)} USDT
+                    </span>
+                  </div>
+                  {account.positions.length > 0 ? (
+                    <div className="mt-2 border-t pt-2">
+                      <p className="mb-1 text-xs text-muted-foreground">
+                        Vị thế đang mở ({account.positions.length})
+                      </p>
+                      <ul className="space-y-1">
+                        {account.positions.map((p) => (
+                          <li
+                            key={`${p.symbol}-${p.side}`}
+                            className="flex justify-between text-xs"
+                          >
+                            <span className="font-mono">
+                              {p.symbol}{" "}
+                              <Badge
+                                variant={p.side === "long" ? "default" : "destructive"}
+                                className="ml-1 text-[10px]"
+                              >
+                                {p.side.toUpperCase()} {p.leverage ?? "?"}x
+                              </Badge>
+                            </span>
+                            <span
+                              className={`font-mono ${
+                                (p.unrealizedPnl ?? 0) > 0
+                                  ? "text-bullish"
+                                  : (p.unrealizedPnl ?? 0) < 0
+                                    ? "text-bearish"
+                                    : ""
+                              }`}
+                            >
+                              {(p.unrealizedPnl ?? 0) >= 0 ? "+" : ""}
+                              {fmtNum(p.unrealizedPnl)}
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  ) : (
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      Chưa có vị thế nào đang mở.
+                    </p>
+                  )}
+                </>
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  {accountLoading ? "Đang tải…" : "—"}
+                </p>
+              )}
+            </div>
+
+            <div className="flex gap-2">
+              <Button variant="outline" size="sm" onClick={() => setEditing(true)}>
+                Đổi key
+              </Button>
+              <Button
+                variant="destructive"
+                size="sm"
+                onClick={disconnect}
+                disabled={submitting}
+              >
+                <Trash2 className="size-4" />
+                Gỡ kết nối
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <>
+            <details className="rounded-md border bg-card/40 px-3 py-2 text-xs">
+              <summary className="cursor-pointer font-medium">
+                Cách lấy API key Binance
+              </summary>
+              <ol className="ml-4 mt-2 list-decimal space-y-1 text-muted-foreground">
+                <li>
+                  Vào{" "}
+                  <a
+                    href="https://www.binance.com/en/my/settings/api-management"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-primary hover:underline"
+                  >
+                    Binance API Management
+                  </a>{" "}
+                  → Create API → System generated.
+                </li>
+                <li>
+                  Permissions: chỉ cần tick <strong>Enable Reading</strong> —
+                  đủ để đồng bộ lệnh/PnL vào nhật ký. KHÔNG tick Enable
+                  Futures/Withdraw — app mặc định không đặt lệnh hộ bạn.
+                </li>
+                <li>
+                  Bắt buộc whitelist IP (Restrict access to trusted IPs) để
+                  quyền Futures hoạt động ổn định.
+                </li>
+                <li>
+                  Copy <strong>API Key</strong> + <strong>Secret Key</strong>{" "}
+                  (secret chỉ hiện 1 lần).
+                </li>
+                <li>
+                  Tài khoản phải đã mở Futures (vào tab Futures kích hoạt 1 lần).
+                </li>
+              </ol>
+            </details>
+            <div className="space-y-3">
+              <FormField label="API Key">
+                <Input
+                  autoComplete="off"
+                  value={apiKey}
+                  onChange={(e) => setApiKey(e.target.value)}
+                  placeholder="64 ký tự từ Binance"
+                />
+              </FormField>
+              <FormField label="Secret Key">
+                <div className="relative">
+                  <Input
+                    autoComplete="off"
+                    type={showSecret ? "text" : "password"}
+                    value={secret}
+                    onChange={(e) => setSecret(e.target.value)}
+                    placeholder="64 ký tự — chỉ hiện 1 lần khi tạo"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowSecret((v) => !v)}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                    aria-label={showSecret ? "Ẩn secret" : "Hiện secret"}
+                  >
+                    {showSecret ? (
+                      <EyeOff className="size-4" />
+                    ) : (
+                      <Eye className="size-4" />
+                    )}
+                  </button>
+                </div>
+              </FormField>
+            </div>
+            <div className="flex gap-2">
+              <Button onClick={save} disabled={submitting}>
+                {submitting ? (
+                  <Loader2 className="size-4 animate-spin" />
+                ) : (
+                  <Plug className="size-4" />
+                )}
+                Kết nối & lưu
+              </Button>
+              {editing ? (
+                <Button
+                  variant="ghost"
+                  onClick={() => {
+                    setEditing(false);
+                    setApiKey("");
+                    setSecret("");
+                  }}
+                >
+                  Huỷ
+                </Button>
+              ) : null}
+            </div>
+          </>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+// ────────────────────────────────────────────────────────────────────
 // Risk limits card — enforced server-side at order placement
 // ────────────────────────────────────────────────────────────────────
 
@@ -872,8 +1215,16 @@ export function RiskLimitsCard() {
   const [maxOpenPositions, setMaxOpenPositions] = React.useState("");
   const [loaded, setLoaded] = React.useState(false);
   const [submitting, setSubmitting] = React.useState(false);
+  // These limits are enforced ONLY at real-order placement, which is
+  // entitlement-gated. Read-only accounts would be configuring a machine
+  // they can't run — hide the card entirely for them.
+  const [entitled, setEntitled] = React.useState(false);
 
   React.useEffect(() => {
+    fetch("/api/brokers/entitlements")
+      .then((r) => r.json())
+      .then((d: { autoTrade?: boolean }) => setEntitled(d.autoTrade === true))
+      .catch(() => setEntitled(false));
     fetch("/api/brokers/risk-limits")
       .then((r) => r.json())
       .then((d: { limits?: { maxRiskPct: number; maxOpenPositions: number } }) => {
@@ -914,6 +1265,8 @@ export function RiskLimitsCard() {
       setSubmitting(false);
     }
   };
+
+  if (!entitled) return null;
 
   return (
     <Card>
@@ -1187,13 +1540,26 @@ type ConsensusConfigUI = {
   timeframes: string[];
   notifyBullish: boolean;
   notifyBearish: boolean;
+  notifyBreak: boolean;
 };
 
 export function ConsensusAlertCard() {
   const [config, setConfig] = React.useState<ConsensusConfigUI | null>(null);
   const [submitting, setSubmitting] = React.useState(false);
+  // Signal conditions are meaningless without a delivery channel — hide
+  // this card until Telegram is connected (the Telegram card above is the
+  // natural first step).
+  const [telegramConnected, setTelegramConnected] = React.useState<
+    boolean | null
+  >(null);
 
   React.useEffect(() => {
+    fetch("/api/notify/telegram")
+      .then((r) => r.json())
+      .then((d: { connected?: boolean }) =>
+        setTelegramConnected(d.connected === true),
+      )
+      .catch(() => setTelegramConnected(false));
     fetch("/api/notify/consensus-config")
       .then((r) => r.json())
       .then((d: { config?: ConsensusConfigUI }) => {
@@ -1222,8 +1588,8 @@ export function ConsensusAlertCard() {
 
   const save = async () => {
     if (!config) return;
-    if (config.timeframes.length < 2) {
-      toast.error("Chọn ít nhất 2 khung — 1 khung thì không còn là “đồng thuận”.");
+    if (config.timeframes.length < 1) {
+      toast.error("Chọn ít nhất 1 khung.");
       return;
     }
     if (!config.notifyBullish && !config.notifyBearish) {
@@ -1255,6 +1621,9 @@ export function ConsensusAlertCard() {
     }
   };
 
+  // No Telegram = no channel to deliver signals — nothing to configure.
+  if (telegramConnected === false) return null;
+
   return (
     <Card>
       <CardHeader>
@@ -1262,7 +1631,7 @@ export function ConsensusAlertCard() {
           <div>
             <CardTitle className="text-base">Tín hiệu đồng thuận</CardTitle>
             <CardDescription>
-              Quét coin trong watchlist (trang Phân tích AI) mỗi 15 phút. Khi
+              Quét coin trong watchlist (trang Quét đa khung) mỗi 15 phút. Khi
               TẤT CẢ các khung đã chọn cùng hướng → gửi Telegram. Chỉ báo lúc
               mới đạt đồng thuận, không spam lại.
             </CardDescription>
@@ -1303,8 +1672,9 @@ export function ConsensusAlertCard() {
               </div>
               <p className="text-[11px] text-muted-foreground">
                 Đang chọn {config.timeframes.length} khung:{" "}
-                {config.timeframes.join(" · ") || "—"}. Càng nhiều khung càng
-                hiếm tín hiệu nhưng càng chắc.
+                {config.timeframes.join(" · ") || "—"}. Nhiều khung = hiếm
+                tín hiệu nhưng chắc; 1 khung = báo theo tín hiệu khung đó
+                (nhạy, nhiều tin hơn — nhất là 15m).
               </p>
             </div>
 
@@ -1333,6 +1703,21 @@ export function ConsensusAlertCard() {
                   }
                 />
               </label>
+              <label className="flex cursor-pointer items-center justify-between gap-3 rounded-md border bg-card/40 p-3 sm:col-span-2">
+                <span className="text-sm">
+                  ⚠️ Báo khi <strong>MẤT đồng thuận</strong>{" "}
+                  <span className="text-xs text-muted-foreground">
+                    — tín hiệu thoát: coin đang theo dõi gãy cấu trúc đa khung
+                  </span>
+                </span>
+                <Switch
+                  checked={config.notifyBreak}
+                  disabled={!config.enabled}
+                  onCheckedChange={(v) =>
+                    setConfig((c) => (c ? { ...c, notifyBreak: !!v } : c))
+                  }
+                />
+              </label>
             </div>
 
             <Button size="sm" onClick={save} disabled={submitting}>
@@ -1357,6 +1742,91 @@ function cnTf(active: boolean, enabled: boolean): string {
   ]
     .filter(Boolean)
     .join(" ");
+}
+
+// ────────────────────────────────────────────────────────────────────
+// Change password card (Tài khoản tab)
+// ────────────────────────────────────────────────────────────────────
+
+export function ChangePasswordCard() {
+  const [current, setCurrent] = React.useState("");
+  const [next, setNext] = React.useState("");
+  const [confirm, setConfirm] = React.useState("");
+  const [submitting, setSubmitting] = React.useState(false);
+
+  const submit = async () => {
+    if (next !== confirm) {
+      toast.error("Mật khẩu mới nhập lại không khớp.");
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const res = await fetch("/api/account/change-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ currentPassword: current, newPassword: next }),
+      });
+      const d = await res.json();
+      if (!res.ok) {
+        toast.error(d?.error ?? `Lỗi ${res.status}`);
+        return;
+      }
+      toast.success("Đã đổi mật khẩu.");
+      setCurrent("");
+      setNext("");
+      setConfirm("");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">Đổi mật khẩu</CardTitle>
+        <CardDescription>
+          Cần mật khẩu hiện tại để xác nhận. Mật khẩu mới tối thiểu 8 ký tự,
+          gồm chữ và số.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <FormField label="Mật khẩu hiện tại">
+          <Input
+            type="password"
+            autoComplete="current-password"
+            value={current}
+            onChange={(e) => setCurrent(e.target.value)}
+          />
+        </FormField>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <FormField label="Mật khẩu mới">
+            <Input
+              type="password"
+              autoComplete="new-password"
+              value={next}
+              onChange={(e) => setNext(e.target.value)}
+            />
+          </FormField>
+          <FormField label="Nhập lại mật khẩu mới">
+            <Input
+              type="password"
+              autoComplete="new-password"
+              value={confirm}
+              onChange={(e) => setConfirm(e.target.value)}
+            />
+          </FormField>
+        </div>
+        <Button
+          size="sm"
+          onClick={submit}
+          disabled={submitting || !current || !next || !confirm}
+        >
+          {submitting ? <Loader2 className="size-4 animate-spin" /> : null}
+          Đổi mật khẩu
+        </Button>
+      </CardContent>
+    </Card>
+  );
 }
 
 // ────────────────────────────────────────────────────────────────────

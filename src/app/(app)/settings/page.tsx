@@ -10,7 +10,9 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { auth } from "@/lib/auth";
 import {
+  BinanceBrokerCard,
   BitgetBrokerCard,
+  ChangePasswordCard,
   ConsensusAlertCard,
   MetaApiBrokerCard,
   RiskLimitsCard,
@@ -34,20 +36,9 @@ const API_KEY_DEFINITIONS = [
   {
     kind: "CRYPTOPANIC",
     label: "CryptoPanic",
-    description: "Aggregator tin tức crypto, có gói free.",
+    description:
+      "Aggregator tin tức crypto (có gói free) — nuôi card Tin nóng + tin liên quan trên trang phân tích.",
     docs: "https://cryptopanic.com/developers/api/",
-  },
-  {
-    kind: "ETHERSCAN",
-    label: "Etherscan",
-    description: "Truy vấn on-chain Ethereum: số dư, giao dịch, ERC-20 transfers.",
-    docs: "https://etherscan.io/myapikey",
-  },
-  {
-    kind: "BSCSCAN",
-    label: "BscScan",
-    description: "Truy vấn on-chain BNB Smart Chain.",
-    docs: "https://bscscan.com/myapikey",
   },
 ];
 
@@ -71,6 +62,7 @@ export default async function SettingsPage() {
 
         <TabsContent value="brokers" className="mt-4 space-y-4">
           <BitgetBrokerCard />
+          <BinanceBrokerCard />
           <RiskLimitsCard />
           <TelegramNotifyCard />
           <ConsensusAlertCard />
@@ -125,7 +117,7 @@ export default async function SettingsPage() {
           </Card>
         </TabsContent>
 
-        <TabsContent value="account" className="mt-4">
+        <TabsContent value="account" className="mt-4 space-y-4">
           <Card>
             <CardHeader>
               <CardTitle className="text-base">Tài khoản</CardTitle>
@@ -144,6 +136,7 @@ export default async function SettingsPage() {
               </div>
             </CardContent>
           </Card>
+          <ChangePasswordCard />
         </TabsContent>
 
         <TabsContent value="preferences" className="mt-4">

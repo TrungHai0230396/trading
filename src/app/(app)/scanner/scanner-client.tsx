@@ -2,9 +2,19 @@
 
 import * as React from "react";
 import Link from "next/link";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { ExternalLink, Eye, EyeOff, Radar, Plus, Sparkles, X } from "lucide-react";
+import {
+  Bell,
+  BellRing,
+  ExternalLink,
+  Eye,
+  EyeOff,
+  Radar,
+  Plus,
+  Sparkles,
+  X,
+} from "lucide-react";
 import {
   LineChart,
   Line,
@@ -425,6 +435,7 @@ export function ScannerClient() {
 
   return (
     <div className="grid gap-6 lg:grid-cols-[minmax(0,360px)_minmax(0,1fr)]">
+      <div className="space-y-6">
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
@@ -625,6 +636,9 @@ export function ScannerClient() {
           </div>
         </CardContent>
       </Card>
+
+      <WatchlistPanel />
+      </div>
 
       <div className="space-y-3">
         <StaleResultBanner
@@ -965,6 +979,8 @@ function ConsensusTopRow({
           Phân tích AI
         </span>
       </Link>
+      {/* Follow: add to the Telegram consensus watchlist. */}
+      {market === "CRYPTO" ? <FollowButton symbol={row.symbol} /> : null}
       {/* Secondary: inline chart preview. */}
       <button
         type="button"
@@ -1391,21 +1407,26 @@ function SummaryRow({
       }
     >
       <TableCell>
-        <button
-          type="button"
-          className="font-mono text-sm font-medium underline-offset-4 hover:underline"
-          onClick={() =>
-            onSelectChart({
-              symbol: row.symbol,
-              market,
-              timeframe: ALL_TIMEFRAMES.includes(timeframes[0] ?? "1h")
-                ? (timeframes[0] ?? "1h")
-                : DEFAULT_CHART_TIMEFRAME,
-            })
-          }
-        >
-          {row.symbol}
-        </button>
+        <div className="flex items-center gap-2">
+          {/* Follow ANY coin you scanned — not just the algo's Top-10 —
+              so you can watch your own picks for consensus / break. */}
+          {market === "CRYPTO" ? <FollowButton symbol={row.symbol} /> : null}
+          <button
+            type="button"
+            className="font-mono text-sm font-medium underline-offset-4 hover:underline"
+            onClick={() =>
+              onSelectChart({
+                symbol: row.symbol,
+                market,
+                timeframe: ALL_TIMEFRAMES.includes(timeframes[0] ?? "1h")
+                  ? (timeframes[0] ?? "1h")
+                  : DEFAULT_CHART_TIMEFRAME,
+              })
+            }
+          >
+            {row.symbol}
+          </button>
+        </div>
       </TableCell>
       <TableCell>
         <ScoreBar value={row.score} />
@@ -1510,3 +1531,341 @@ function StaleResultBanner({
 }
 
 
+
+// ──────────────────────────────────────────────────────────────────────
+// Watchlist — feeds the 15-minute Telegram consensus alert
+// ──────────────────────────────────────────────────────────────────────
+//
+// Moved here from the removed /insights page: the scanner is where users
+// discover coins, so following them for alerts belongs on the same screen.
+// The consensus cron reads WatchlistSymbol (market CRYPTO) directly.
+
+type WatchlistItem = { id: string; symbol: string; market: string };
+
+function useWatchlist() {
+  const queryClient = useQueryClient();
+  const list = useQuery<{ items: WatchlistItem[] }>({
+    queryKey: ["watchlist", "CRYPTO"],
+    queryFn: async ({ signal }) => {
+      const res = await fetch("/api/watchlist?market=CRYPTO", { signal });
+      if (!res.ok) throw new Error("Không tải được watchlist");
+      return (await res.json()) as { items: WatchlistItem[] };
+    },
+    staleTime: 60_000,
+  });
+
+  const add = useMutation({
+    mutationFn: async (symbol: string) => {
+      const res = await fetch("/api/watchlist", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ symbol, market: "CRYPTO" }),
+      });
+      const j = await res.json();
+      if (!res.ok) throw new Error(j?.error ?? "Thêm thất bại");
+      return j as WatchlistItem;
+    },
+    onSuccess: (item) => {
+      toast.success(
+        `Đã theo dõi ${item.symbol} — sẽ báo Telegram khi trạng thái đồng thuận THAY ĐỔI (đạt mới / gãy).`,
+      );
+      queryClient.invalidateQueries({ queryKey: ["watchlist", "CRYPTO"] });
+    },
+    onError: (e) => {
+      toast.error(e instanceof Error ? e.message : "Thêm thất bại");
+    },
+  });
+
+  const remove = useMutation({
+    mutationFn: async (id: string) => {
+      const res = await fetch(`/api/watchlist/${id}`, { method: "DELETE" });
+      if (!res.ok) throw new Error("Xoá thất bại");
+      return id;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["watchlist", "CRYPTO"] });
+    },
+    onError: (e) => {
+      toast.error(e instanceof Error ? e.message : "Xoá thất bại");
+    },
+  });
+
+  return { list, add, remove };
+}
+
+function WatchlistPanel() {
+  const { list, add, remove } = useWatchlist();
+  const queryClient = useQueryClient();
+  const [input, setInput] = React.useState("");
+  const items = list.data?.items ?? [];
+
+  // Default TF set (global consensus config) + per-coin overrides.
+  const config = useQuery<{ config: { timeframes: string[] } }>({
+    queryKey: ["consensus-config"],
+    queryFn: async () => {
+      const res = await fetch("/api/notify/consensus-config");
+      if (!res.ok) throw new Error("config");
+      return (await res.json()) as { config: { timeframes: string[] } };
+    },
+    staleTime: 5 * 60_000,
+  });
+  const overridesQ = useQuery<{ overrides: Record<string, string[]> }>({
+    queryKey: ["consensus-overrides"],
+    queryFn: async () => {
+      const res = await fetch("/api/notify/consensus-overrides");
+      if (!res.ok) throw new Error("overrides");
+      return (await res.json()) as { overrides: Record<string, string[]> };
+    },
+    staleTime: 60_000,
+  });
+  const defaultTfs = (config.data?.config.timeframes ?? [
+    "1h",
+    "4h",
+    "1d",
+    "1w",
+  ]) as Timeframe[];
+  const overrides = (overridesQ.data?.overrides ?? {}) as Record<
+    string,
+    Timeframe[]
+  >;
+
+  const saveOverride = async (symbol: string, tfs: Timeframe[] | null) => {
+    const res = await fetch("/api/notify/consensus-overrides", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ symbol, timeframes: tfs }),
+    });
+    if (!res.ok) {
+      const j = await res.json().catch(() => null);
+      toast.error(j?.error ?? "Lưu khung riêng thất bại");
+      return;
+    }
+    toast.success(
+      tfs
+        ? `${symbol}: canh riêng ${tfs.join("·")}`
+        : `${symbol}: về khung mặc định`,
+    );
+    queryClient.invalidateQueries({ queryKey: ["consensus-overrides"] });
+  };
+
+  const submit = () => {
+    const s = input.trim().toUpperCase().replace(/[/\s]/g, "");
+    if (!s) return;
+    add.mutate(s);
+    setInput("");
+  };
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-base">
+          <BellRing className="size-4 text-primary" />
+          Watchlist · báo Telegram
+        </CardTitle>
+        <CardDescription>
+          Quét mỗi 15 phút, chỉ báo <strong>thay đổi</strong> sau khi bạn
+          theo dõi: coin <em>đạt</em> đồng thuận mới, hoặc coin đang đồng
+          thuận <em>gãy cấu trúc</em> (tín hiệu thoát). Bật 🔔 trên coin
+          Top 10 = canh điểm gãy cho vị thế đang giữ.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <div className="flex gap-2">
+          <Input
+            className="num flex-1"
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") submit();
+            }}
+            placeholder="Thêm coin: SUIUSDT…"
+          />
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            disabled={!input.trim() || add.isPending}
+            onClick={submit}
+          >
+            <Plus className="size-4" />
+          </Button>
+        </div>
+
+        {list.isLoading ? (
+          <p className="text-xs text-muted-foreground">Đang tải…</p>
+        ) : items.length === 0 ? (
+          <p className="rounded-md border border-dashed p-3 text-xs text-muted-foreground">
+            Chưa theo dõi coin nào — thêm coin để nhận tín hiệu đồng thuận
+            qua Telegram.
+          </p>
+        ) : (
+          <div className="space-y-1.5">
+            {items.map((w) => (
+              <WatchlistRow
+                key={w.id}
+                symbol={w.symbol}
+                defaultTfs={defaultTfs}
+                override={overrides[w.symbol.toUpperCase()] ?? null}
+                onRemove={() => remove.mutate(w.id)}
+                onSaveOverride={(tfs) => saveOverride(w.symbol, tfs)}
+              />
+            ))}
+          </div>
+        )}
+        <p className="text-[11px] leading-relaxed text-muted-foreground">
+          Mặc định canh {defaultTfs.join("·")} (đổi ở Cài đặt → Tín hiệu
+          đồng thuận). Bấm khung trên mỗi coin để đặt riêng.
+        </p>
+      </CardContent>
+    </Card>
+  );
+}
+
+const ALERT_TFS: Timeframe[] = ["15m", "1h", "4h", "1d", "3d", "1w", "1M"];
+
+function WatchlistRow({
+  symbol,
+  defaultTfs,
+  override,
+  onRemove,
+  onSaveOverride,
+}: {
+  symbol: string;
+  defaultTfs: Timeframe[];
+  override: Timeframe[] | null;
+  onRemove: () => void;
+  onSaveOverride: (tfs: Timeframe[] | null) => void;
+}) {
+  const [editing, setEditing] = React.useState(false);
+  const effective = override ?? defaultTfs;
+  const [draft, setDraft] = React.useState<Timeframe[]>(effective);
+
+  const toggle = (tf: Timeframe) =>
+    setDraft((d) =>
+      d.includes(tf)
+        ? d.filter((x) => x !== tf)
+        : ALERT_TFS.filter((x) => d.includes(x) || x === tf),
+    );
+
+  return (
+    <div className="rounded-md border bg-card/40 p-2">
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <span className="font-mono text-sm">{symbol}</span>
+          <button
+            type="button"
+            onClick={() => {
+              setDraft(effective);
+              setEditing((v) => !v);
+            }}
+            className={cn(
+              "rounded-full border px-2 py-0.5 text-[10px] transition",
+              override
+                ? "border-primary/40 bg-primary/10 text-primary"
+                : "text-muted-foreground hover:text-foreground",
+            )}
+            title="Đặt khung riêng cho coin này"
+          >
+            {effective.join("·")}
+            {override ? " ·riêng" : " ·mặc định"}
+          </button>
+        </div>
+        <button
+          type="button"
+          className="rounded-full p-0.5 text-muted-foreground transition hover:bg-destructive/10 hover:text-destructive"
+          onClick={onRemove}
+          aria-label={`Bỏ theo dõi ${symbol}`}
+        >
+          <X className="size-3.5" />
+        </button>
+      </div>
+
+      {editing ? (
+        <div className="mt-2 space-y-2 border-t pt-2">
+          <div className="flex flex-wrap gap-1">
+            {ALERT_TFS.map((tf) => {
+              const active = draft.includes(tf);
+              return (
+                <button
+                  key={tf}
+                  type="button"
+                  onClick={() => toggle(tf)}
+                  className={cn(
+                    "rounded-full border px-2 py-0.5 font-mono text-[10px] transition",
+                    active
+                      ? "border-primary bg-primary/15 text-primary"
+                      : "border-border text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  {tf}
+                </button>
+              );
+            })}
+          </div>
+          <div className="flex items-center gap-2">
+            <Button
+              size="xs"
+              disabled={draft.length < 1}
+              onClick={() => {
+                onSaveOverride(draft);
+                setEditing(false);
+              }}
+            >
+              Lưu khung riêng
+            </Button>
+            {override ? (
+              <Button
+                size="xs"
+                variant="ghost"
+                onClick={() => {
+                  onSaveOverride(null);
+                  setEditing(false);
+                }}
+              >
+                Về mặc định
+              </Button>
+            ) : null}
+            <span className="text-[10px] text-muted-foreground">
+              1 khung = báo theo tín hiệu khung đó (nhạy hơn)
+            </span>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/** Bell toggle on a Top-10 consensus row — follow/unfollow in one tap. */
+function FollowButton({ symbol }: { symbol: string }) {
+  const { list, add, remove } = useWatchlist();
+  const existing = (list.data?.items ?? []).find(
+    (w) => w.symbol.toUpperCase() === symbol.toUpperCase(),
+  );
+
+  return (
+    <button
+      type="button"
+      className={cn(
+        "inline-flex items-center rounded-md border p-1.5 transition-colors",
+        existing
+          ? "border-primary/40 text-primary"
+          : "text-muted-foreground hover:text-foreground",
+      )}
+      disabled={add.isPending || remove.isPending}
+      onClick={() => {
+        if (existing) remove.mutate(existing.id);
+        else add.mutate(symbol);
+      }}
+      aria-label={
+        existing ? `Bỏ theo dõi ${symbol}` : `Theo dõi ${symbol} (báo Telegram)`
+      }
+      title={
+        existing
+          ? "Đang theo dõi — bấm để bỏ"
+          : "Theo dõi: báo Telegram khi coin này MẤT đồng thuận (tín hiệu thoát) hoặc đạt đồng thuận mới"
+      }
+    >
+      {existing ? <BellRing className="size-3" /> : <Bell className="size-3" />}
+    </button>
+  );
+}

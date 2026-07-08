@@ -260,33 +260,59 @@ export function TradeFormClient({
   // Default OFF. The toggle only becomes enable-able when:
   //   - mode === "new"
   //   - market === "CRYPTO"
-  //   - Bitget creds are connected (status fetch below)
+  //   - at least one broker (Bitget/Binance) is connected
   // After the journal save completes, we open the confirm dialog with
   // the saved tradeJournalId — the dialog calls POST /broker/order.
   const [autoPlaceEnabled, setAutoPlaceEnabled] = React.useState(false);
   const [bitgetConnected, setBitgetConnected] = React.useState<boolean | null>(
     null,
   );
+  const [binanceConnected, setBinanceConnected] = React.useState<
+    boolean | null
+  >(null);
+  const [broker, setBroker] = React.useState<"BITGET" | "BINANCE">("BITGET");
+  // Auto-trade is a restricted feature (read-only product by default) —
+  // the server enforces this on every write route; this flag only decides
+  // whether to RENDER the auto-place card at all.
+  const [autoTradeEntitled, setAutoTradeEntitled] = React.useState(false);
   const [autoPlacePayload, setAutoPlacePayload] =
     React.useState<AutoPlacePayload | null>(null);
   const submitLockRef = React.useRef(false);
   React.useEffect(() => {
     if (mode !== "new") return;
     let cancelled = false;
-    fetch("/api/brokers/bitget/keys")
-      .then((r) => r.json())
-      .then((j) => {
-        if (!cancelled) setBitgetConnected(!!j?.connected);
-      })
-      .catch(() => {
-        if (!cancelled) setBitgetConnected(false);
-      });
+    Promise.all([
+      fetch("/api/brokers/bitget/keys")
+        .then((r) => r.json())
+        .catch(() => null),
+      fetch("/api/brokers/binance/keys")
+        .then((r) => r.json())
+        .catch(() => null),
+      fetch("/api/brokers/entitlements")
+        .then((r) => r.json())
+        .catch(() => null),
+    ]).then(([bg, bn, ent]) => {
+      if (cancelled) return;
+      const bgOk = !!bg?.connected;
+      const bnOk = !!bn?.connected;
+      setBitgetConnected(bgOk);
+      setBinanceConnected(bnOk);
+      setAutoTradeEntitled(ent?.autoTrade === true);
+      // Default to whichever single broker is connected.
+      if (!bgOk && bnOk) setBroker("BINANCE");
+    });
     return () => {
       cancelled = true;
     };
   }, [mode]);
+  const anyBrokerConnected =
+    bitgetConnected === true || binanceConnected === true;
   const canAutoPlace =
-    mode === "new" && state.market === "CRYPTO" && bitgetConnected === true;
+    mode === "new" &&
+    state.market === "CRYPTO" &&
+    anyBrokerConnected &&
+    autoTradeEntitled;
+  const brokerName = broker === "BINANCE" ? "Binance" : "Bitget";
   const [uploadCaption, setUploadCaption] = React.useState("");
   const [uploadKind, setUploadKind] = React.useState<"" | "before" | "during" | "after">("");
   const [uploadUrl, setUploadUrl] = React.useState("");
@@ -405,6 +431,7 @@ export function TradeFormClient({
       ) {
         setAutoPlacePayload({
           tradeJournalId: data.id,
+          broker,
           symbol: state.symbol.trim().toUpperCase(),
           direction: state.direction,
           units: num(state.lotSize),
@@ -1231,13 +1258,17 @@ export function TradeFormClient({
         </CardContent>
       </Card>
 
-      {mode === "new" ? (
+      {/* Restricted feature: hidden entirely for read-only accounts. */}
+      {mode === "new" && autoTradeEntitled ? (
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Đặt lệnh thật trên Bitget</CardTitle>
+            <CardTitle className="text-base">
+              Đặt lệnh thật trên sàn ({brokerName})
+            </CardTitle>
             <CardDescription>
-              Sau khi tạo lệnh trong nhật ký, tự động gửi lệnh limit sang Bitget USDT-Futures.
-              Lệnh có Stop Loss / Take Profit nếu bạn điền ở trên.
+              Sau khi tạo lệnh trong nhật ký, tự động gửi lệnh limit sang{" "}
+              {brokerName} USDT-Futures. Lệnh có Stop Loss / Take Profit nếu
+              bạn điền ở trên.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
@@ -1251,7 +1282,7 @@ export function TradeFormClient({
                     onCheckedChange={(v) => setAutoPlaceEnabled(!!v)}
                   />
                   <Label htmlFor="auto-place" className="cursor-pointer">
-                    Tự đặt lệnh trên Bitget khi lưu
+                    Tự đặt lệnh trên {brokerName} khi lưu
                   </Label>
                   {autoPlaceEnabled && canAutoPlace ? (
                     <Badge variant="destructive" className="text-[10px]">
@@ -1260,16 +1291,39 @@ export function TradeFormClient({
                   ) : null}
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  {bitgetConnected === null
-                    ? "Đang kiểm tra kết nối Bitget…"
-                    : !bitgetConnected
-                      ? "Chưa kết nối Bitget. Vào Cài đặt → Sàn giao dịch để thêm API key."
+                  {bitgetConnected === null && binanceConnected === null
+                    ? "Đang kiểm tra kết nối sàn…"
+                    : !anyBrokerConnected
+                      ? "Chưa kết nối sàn nào. Vào Cài đặt → Sàn giao dịch để thêm API key (Bitget hoặc Binance)."
                       : state.market !== "CRYPTO"
                         ? "Chỉ hỗ trợ thị trường CRYPTO trong giai đoạn này."
                         : "Khối lượng dưới đây là số coin gốc (vd 0.001 BTC), KHÔNG phải lot forex."}
                 </p>
               </div>
             </div>
+
+            {canAutoPlace && bitgetConnected && binanceConnected ? (
+              <div className="grid grid-cols-[120px_1fr] items-center gap-3 rounded-md border bg-card/40 p-3">
+                <Label>Sàn giao dịch</Label>
+                <Select
+                  value={broker}
+                  onValueChange={(v) =>
+                    (v === "BITGET" || v === "BINANCE") && setBroker(v)
+                  }
+                >
+                  <SelectTrigger className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="BITGET">Bitget Futures</SelectItem>
+                    <SelectItem value="BINANCE">Binance Futures</SelectItem>
+                  </SelectContent>
+                </Select>
+                <span className="col-span-2 text-xs text-muted-foreground">
+                  Cả 2 sàn đang kết nối — chọn nơi đặt lệnh thật cho mục này.
+                </span>
+              </div>
+            ) : null}
 
             {canAutoPlace ? (
               <div className="grid grid-cols-[120px_1fr] items-center gap-3 rounded-md border bg-card/40 p-3">

@@ -17,7 +17,7 @@ const jetbrainsMono = JetBrains_Mono({
 export const metadata: Metadata = {
   title: "Tranding — Bảng điều khiển giao dịch",
   description:
-    "Tính khối lượng lệnh, nhật ký, quét đa khung thời gian, tin tức AI và phân tích on-chain.",
+    "Tính khối lượng lệnh, nhật ký giao dịch, quét đa khung thời gian và cảnh báo Telegram.",
 };
 
 export default function RootLayout({

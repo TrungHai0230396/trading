@@ -106,6 +106,19 @@ export function BrokerOrderPanel({ tradeJournalId }: { tradeJournalId: string })
     },
   });
 
+  // Read-only accounts see order STATUS but no write actions — the server
+  // enforces this too (403); hiding the buttons avoids a dead-end click.
+  const entitlement = useQuery<{ autoTrade: boolean }>({
+    queryKey: ["broker-entitlements"],
+    queryFn: async () => {
+      const res = await fetch("/api/brokers/entitlements");
+      if (!res.ok) return { autoTrade: false };
+      return (await res.json()) as { autoTrade: boolean };
+    },
+    staleTime: 5 * 60_000,
+  });
+  const canWrite = entitlement.data?.autoTrade === true;
+
   const moveSL = useMutation({
     mutationFn: async (input: { brokerOrderId: string; confirmText: string }) => {
       const res = await fetch("/api/brokers/bitget/move-sl", {
@@ -267,8 +280,10 @@ export function BrokerOrderPanel({ tradeJournalId }: { tradeJournalId: string })
       <CardContent className="space-y-3">
         {orders.data.orders.map((o) => {
           const badge = statusBadge(o.status);
-          const canCancel = o.status === "PLACED" || o.status === "PLACED_NO_SL";
-          const canMoveSL = o.status === "FILLED";
+          const canCancel =
+            canWrite &&
+            (o.status === "PLACED" || o.status === "PLACED_NO_SL");
+          const canMoveSL = canWrite && o.status === "FILLED";
           return (
             <div
               key={o.id}

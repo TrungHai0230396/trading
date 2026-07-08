@@ -3,7 +3,7 @@
 import * as React from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { LineChart, LogOut, User2 } from "lucide-react";
+import { LineChart, LogOut } from "lucide-react";
 import { signOut, useSession } from "next-auth/react";
 
 import {
@@ -18,15 +18,8 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
 } from "@/components/ui/sidebar";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Button } from "@/components/ui/button";
 import { NAV_GROUPS } from "@/lib/nav";
 
 function isActiveHref(pathname: string, href: string) {
@@ -92,47 +85,42 @@ export function AppSidebar() {
       </SidebarContent>
 
       <SidebarFooter>
-        <DropdownMenu>
-          <DropdownMenuTrigger
-            render={
-              <SidebarMenuButton size="lg">
-                <Avatar className="size-7">
-                  <AvatarFallback className="bg-primary/10 text-xs font-semibold text-primary">
-                    {initials}
-                  </AvatarFallback>
-                </Avatar>
-                <div className="flex flex-1 flex-col leading-tight">
-                  <span className="truncate text-sm font-medium">
-                    {session?.user?.name ?? session?.user?.email ?? "Trader"}
-                  </span>
-                  <span className="truncate text-[11px] text-muted-foreground">
-                    {session?.user?.email ?? ""}
-                  </span>
-                </div>
-              </SidebarMenuButton>
-            }
-          />
-          <DropdownMenuContent
-            side="top"
-            align="start"
-            className="min-w-[14rem]"
+        {/* Explicit logout — no hidden menu. The previous dropdown trigger
+            (Menu.Trigger render→SidebarMenuButton composition) never opened
+            on click, leaving users with NO way to sign out. A visible
+            button is also simply better UX for this. */}
+        <div className="flex items-center gap-2 rounded-md border bg-card/40 p-2">
+          <Avatar className="size-7 shrink-0">
+            <AvatarFallback className="bg-primary/10 text-xs font-semibold text-primary">
+              {initials}
+            </AvatarFallback>
+          </Avatar>
+          <div className="flex min-w-0 flex-1 flex-col leading-tight">
+            <span className="truncate text-sm font-medium">
+              {session?.user?.name ?? session?.user?.email ?? "Trader"}
+            </span>
+            <span className="truncate text-[11px] text-muted-foreground">
+              {session?.user?.email ?? ""}
+            </span>
+          </div>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            className="shrink-0 text-muted-foreground hover:text-destructive"
+            onClick={() => {
+              // Confirm — the icon sits next to the user block and an
+              // accidental tap would dump the user out mid-workflow.
+              if (confirm("Đăng xuất khỏi Tranding?")) {
+                void signOut({ callbackUrl: "/login" });
+              }
+            }}
+            aria-label="Đăng xuất"
+            title="Đăng xuất"
           >
-            <DropdownMenuLabel>Tài khoản</DropdownMenuLabel>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem render={<Link href="/settings" />}>
-              <User2 className="mr-2 size-4" />
-              Cài đặt
-            </DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem
-              onClick={() => signOut({ callbackUrl: "/login" })}
-              className="text-destructive focus:text-destructive"
-            >
-              <LogOut className="mr-2 size-4" />
-              Đăng xuất
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
+            <LogOut className="size-4" />
+          </Button>
+        </div>
       </SidebarFooter>
     </Sidebar>
   );

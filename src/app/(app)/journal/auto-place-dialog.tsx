@@ -44,6 +44,7 @@ import {
 
 export type AutoPlacePayload = {
   tradeJournalId: string;
+  broker: "BITGET" | "BINANCE";
   symbol: string;
   direction: "LONG" | "SHORT";
   units: number;
@@ -109,14 +110,16 @@ export function AutoPlaceDialog({
     }
     let cancelled = false;
     setLoading(true);
+    const base =
+      payload.broker === "BINANCE" ? "/api/brokers/binance" : "/api/brokers/bitget";
     Promise.all([
       fetch(
-        `/api/brokers/bitget/contract?symbol=${encodeURIComponent(payload.symbol)}`,
+        `${base}/contract?symbol=${encodeURIComponent(payload.symbol)}`,
       ).then(async (r) => {
         const j = await r.json().catch(() => null);
         return { ok: r.ok, status: r.status, body: j };
       }),
-      fetch("/api/brokers/bitget/account").then(async (r) => {
+      fetch(`${base}/account`).then(async (r) => {
         const j = await r.json().catch(() => null);
         return { ok: r.ok, status: r.status, body: j };
       }),
@@ -150,6 +153,7 @@ export function AutoPlaceDialog({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           tradeJournalId: payload.tradeJournalId,
+          broker: payload.broker,
           symbol: payload.symbol,
           direction: payload.direction,
           units: payload.units,
@@ -178,7 +182,9 @@ export function AutoPlaceDialog({
       if (data.warning) {
         toast.error(data.warning, { duration: 10_000 });
       } else {
-        toast.success(`Đã đặt lệnh Bitget · #${data.orderId}`);
+        toast.success(
+          `Đã đặt lệnh ${payload?.broker === "BINANCE" ? "Binance" : "Bitget"} · #${data.orderId}`,
+        );
       }
       onPlaced?.();
     },
@@ -188,6 +194,7 @@ export function AutoPlaceDialog({
   });
 
   if (!payload) return null;
+  const brokerName = payload.broker === "BINANCE" ? "Binance" : "Bitget";
 
   // Pre-flight math, mirrors server-side normalization.
   const normalizedSize = spec
@@ -261,11 +268,11 @@ export function AutoPlaceDialog({
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <ShieldAlert className="size-5 text-amber-500" />
-            Đặt lệnh thật trên Bitget
+            Đặt lệnh thật trên {brokerName}
           </DialogTitle>
           <DialogDescription>
             Đây là lệnh thật, dùng tiền thật và <strong>không thể hoàn tác</strong>{" "}
-            sau khi Bitget khớp lệnh.
+            sau khi {brokerName} khớp lệnh.
           </DialogDescription>
         </DialogHeader>
 
@@ -274,7 +281,7 @@ export function AutoPlaceDialog({
             <div className="flex items-center gap-2">
               <ShieldCheck className="size-4 text-emerald-500" />
               <span>
-                Đã gửi lệnh tới Bitget · OrderId{" "}
+                Đã gửi lệnh tới {brokerName} · OrderId{" "}
                 <code className="font-mono text-xs">{placedOrderId}</code>
               </span>
             </div>
@@ -424,7 +431,7 @@ export function AutoPlaceDialog({
               {belowNotional && spec ? (
                 <Banner
                   level="error"
-                  text={`Giá trị lệnh < ${spec.minTradeUSDT} USDT (mức tối thiểu của Bitget).`}
+                  text={`Giá trị lệnh < ${spec.minTradeUSDT} USDT (mức tối thiểu của sàn).`}
                 />
               ) : null}
               {insufficient ? (

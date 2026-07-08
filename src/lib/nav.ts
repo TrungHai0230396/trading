@@ -3,10 +3,7 @@ import {
   Calculator,
   BookOpenText,
   Radar,
-  Newspaper,
-  Boxes,
   Settings,
-  Sparkles,
   type LucideIcon,
 } from "lucide-react";
 
@@ -48,25 +45,8 @@ export const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
         label: "Quét đa khung",
         href: "/scanner",
         icon: Radar,
-        description: "RSI/MACD/EMA trên nhiều timeframe",
-      },
-      {
-        label: "Phân tích AI",
-        href: "/insights",
-        icon: Sparkles,
-        description: "AI chấm coin bạn chọn + gợi ý Top Trend đa khung",
-      },
-      {
-        label: "Tin tức & AI",
-        href: "/news",
-        icon: Newspaper,
-        description: "Tin tổng hợp + AI tóm tắt",
-      },
-      {
-        label: "On-chain",
-        href: "/onchain",
-        icon: Boxes,
-        description: "Phân tích ví/token bằng AI",
+        description:
+          "Quét đồng thuận đa timeframe + watchlist Telegram + phân tích sâu từng coin",
       },
     ],
   },
