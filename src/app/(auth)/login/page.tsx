@@ -1,6 +1,12 @@
 import { Suspense } from "react";
 import Link from "next/link";
 import { LoginForm } from "./login-form";
+import { googleEnabled } from "@/lib/auth";
+
+// Evaluated per-request, not baked at build time — the Docker builder has
+// no AUTH_GOOGLE_* env, so a static prerender would freeze the Google
+// button as hidden forever.
+export const dynamic = "force-dynamic";
 
 export default function LoginPage() {
   return (
@@ -12,7 +18,7 @@ export default function LoginPage() {
         </p>
       </div>
       <Suspense fallback={<div className="h-[260px]" />}>
-        <LoginForm />
+        <LoginForm googleEnabled={googleEnabled} />
       </Suspense>
       <p className="text-xs text-muted-foreground">
         Lần đầu sử dụng?{" "}

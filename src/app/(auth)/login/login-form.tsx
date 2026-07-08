@@ -10,6 +10,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { GoogleLoginButton } from "@/components/google-login-button";
 
 const schema = z.object({
   email: z.string().email("Email không hợp lệ"),
@@ -17,7 +18,11 @@ const schema = z.object({
 });
 type FormValues = z.infer<typeof schema>;
 
-export function LoginForm() {
+export function LoginForm({
+  googleEnabled = false,
+}: {
+  googleEnabled?: boolean;
+}) {
   const router = useRouter();
   const params = useSearchParams();
   const callbackUrl = params.get("callbackUrl") ?? "/";
@@ -76,6 +81,8 @@ export function LoginForm() {
       <Button type="submit" className="w-full" disabled={pending}>
         {pending ? "Đang đăng nhập…" : "Đăng nhập"}
       </Button>
+
+      <GoogleLoginButton enabled={googleEnabled} callbackUrl={callbackUrl} />
     </form>
   );
 }

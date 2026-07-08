@@ -31,7 +31,7 @@ export default function AuthLayout({
           </h2>
           <p className="max-w-md text-sm text-muted-foreground">
             Tính khối lượng lệnh, nhật ký, quét đa timeframe, tin tức AI tóm
-            tắt và phân tích on-chain — tất cả trong một chỗ.
+            tắt và cảnh báo Telegram — tất cả trong một chỗ.
           </p>
         </div>
       </div>

@@ -1,5 +1,9 @@
 import Link from "next/link";
 import { RegisterForm } from "./register-form";
+import { googleEnabled } from "@/lib/auth";
+
+// Per-request render — see login/page.tsx (build-time env is empty).
+export const dynamic = "force-dynamic";
 
 export default function RegisterPage() {
   return (
@@ -9,14 +13,11 @@ export default function RegisterPage() {
           Tạo tài khoản
         </h1>
         <p className="text-sm text-muted-foreground">
-          Đăng ký một lần. Có thể tắt sau qua{" "}
-          <code className="rounded bg-muted px-1.5 py-0.5 text-xs">
-            ALLOW_REGISTRATION=false
-          </code>
-          .
+          Miễn phí. Nhật ký giao dịch, tính khối lượng, quét đa khung và
+          cảnh báo Telegram.
         </p>
       </div>
-      <RegisterForm />
+      <RegisterForm googleEnabled={googleEnabled} />
       <p className="text-xs text-muted-foreground">
         Đã có tài khoản?{" "}
         <Link
