@@ -4,7 +4,9 @@ import { auth } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { normalizeSymbol } from "@/lib/insights/curated";
 
-const marketEnum = z.enum(["FOREX", "CRYPTO"]);
+// Crypto-only: the scanner (on-demand + consensus cron) no longer covers
+// forex, so nothing forex should enter the watchlist either.
+const marketEnum = z.enum(["CRYPTO"]);
 
 const listQuerySchema = z.object({
   market: marketEnum,

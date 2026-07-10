@@ -17,7 +17,9 @@ const RUN_RETENTION_PER_USER = 100;
 
 const requestSchema = z
   .object({
-    market: z.enum(["FOREX", "CRYPTO"]),
+    // Crypto-only scanner — forex removed (shared TwelveData key can't
+    // sustain a multi-symbol × multi-TF scan on the free tier).
+    market: z.enum(["CRYPTO"]),
     symbols: z.array(z.string().min(2).max(20)).max(50),
     timeframes: z
       .array(z.enum(ALL_TIMEFRAMES as [string, ...string[]]))

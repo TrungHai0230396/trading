@@ -35,7 +35,6 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -72,7 +71,6 @@ import { cn } from "@/lib/utils";
 
 type Market = "FOREX" | "CRYPTO";
 
-const DEFAULT_FOREX = ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD"];
 const DEFAULT_CRYPTO = ["BTCUSDT", "ETHUSDT", "SOLUSDT"];
 const TIMEFRAMES_STORAGE_KEY = "scanner:selected-timeframes";
 const CHART_HEIGHT_STORAGE_KEY = "scanner:chart-height";
@@ -250,20 +248,6 @@ export function ScannerClient() {
   const selectChart = React.useCallback((selection: ChartSelection) => {
     setChartSelection(normalizeChartSelection(selection));
   }, []);
-
-  const onMarketChange = (m: string | null) => {
-    if (!m) return;
-    const market = m as Market;
-    setState((prev) => ({
-      ...initialState(),
-      market,
-      symbols: market === "FOREX" ? [...DEFAULT_FOREX] : [...DEFAULT_CRYPTO],
-      timeframes: prev.timeframes,
-    }));
-    setPickerSymbol("");
-    setCustomSymbol("");
-    setResult(null);
-  };
 
   const addSymbol = (raw: string) => {
     const s = raw.trim().toUpperCase().replace("/", "");
@@ -443,24 +427,13 @@ export function ScannerClient() {
             Cấu hình quét
           </CardTitle>
           <CardDescription>
-            Chọn thị trường, symbol và khung thời gian rồi bấm{" "}
+            Chọn coin và khung thời gian rồi bấm{" "}
             <strong>Quét coin đã chọn</strong>. Top 10 Bullish/Bearish đồng
             thuận là chức năng riêng, chỉ chạy khi bạn bấm nút quét Top 10.
-            Danh sách Top 10 lấy theo market mặc định của hệ thống.
           </CardDescription>
         </CardHeader>
 
         <CardContent className="space-y-5">
-          <div className="space-y-1.5">
-            <Label>Thị trường</Label>
-            <Tabs value={state.market} onValueChange={onMarketChange}>
-              <TabsList className="grid w-full grid-cols-2">
-                <TabsTrigger value="FOREX">Forex</TabsTrigger>
-                <TabsTrigger value="CRYPTO">Crypto</TabsTrigger>
-              </TabsList>
-            </Tabs>
-          </div>
-
           <div className="space-y-1.5">
             <Label>Thêm symbol</Label>
             <div className="flex gap-2">
@@ -479,11 +452,7 @@ export function ScannerClient() {
             <div className="flex gap-2 pt-1">
               <Input
                 className="num"
-                placeholder={
-                  state.market === "CRYPTO"
-                    ? "Hoặc gõ symbol tùy chọn (vd: SUIUSDT)"
-                    : "Hoặc gõ symbol tùy chọn (vd: EURUSD)"
-                }
+                placeholder="Hoặc gõ symbol tùy chọn (vd: SUIUSDT)"
                 value={customSymbol}
                 onChange={(e) => setCustomSymbol(e.target.value)}
                 onKeyDown={(e) => {
@@ -617,20 +586,12 @@ export function ScannerClient() {
                 : "Quét Top 10 đồng thuận"}
             </Button>
             <p className="text-center text-xs text-muted-foreground">
-              Nút Top 10 dùng danh sách mặc định theo market và chỉ chạy khi
-              bạn chủ động bấm. Mặc định hệ thống chỉ quét danh sách
-              coin/symbol đã chọn.
+              Nút Top 10 chỉ chạy khi bạn chủ động bấm. Mặc định hệ thống chỉ
+              quét danh sách coin đã chọn.
             </p>
             {errorMessage ? (
               <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">
                 <div className="font-medium">Lỗi quét: {errorMessage}</div>
-                {errorMessage.toLowerCase().includes("twelve data") ||
-                errorMessage.toLowerCase().includes("giới hạn") ? (
-                  <div className="mt-1 text-destructive/80">
-                    Forex intraday có thể bị giới hạn. Hãy thử lại sau hoặc
-                    dùng khung 1D/1W/1M.
-                  </div>
-                ) : null}
               </div>
             ) : null}
           </div>

@@ -40,7 +40,8 @@ export async function POST(_req: Request, ctx: RouteCtx) {
 
   const { market: rawMarket, symbol: rawSymbol } = await ctx.params;
   const market = rawMarket.toUpperCase();
-  if (market !== "CRYPTO" && market !== "FOREX") {
+  // Crypto-only scanner — forex removed.
+  if (market !== "CRYPTO") {
     return NextResponse.json({ error: "Market không hợp lệ" }, { status: 400 });
   }
   const symbol = rawSymbol.toUpperCase().replace(/[^A-Z0-9]/g, "");

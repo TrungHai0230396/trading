@@ -40,7 +40,8 @@ export default async function AnalysisPage({
 
   const { market: rawMarket, symbol: rawSymbol } = await params;
   const market = rawMarket.toUpperCase();
-  if (market !== "CRYPTO" && market !== "FOREX") notFound();
+  // Crypto-only scanner — forex analysis pages 404.
+  if (market !== "CRYPTO") notFound();
   const symbol = rawSymbol.toUpperCase().replace(/[^A-Z0-9]/g, "");
   if (!symbol || symbol.length < 3) notFound();
 

@@ -6,7 +6,8 @@ import { ALL_TIMEFRAMES } from "@/lib/scanner/candles";
 import { rateLimit } from "@/lib/brokers/rate-limit";
 
 const requestSchema = z.object({
-  market: z.enum(["FOREX", "CRYPTO"]),
+  // Crypto-only scanner — forex removed (see scanner/runs route).
+  market: z.enum(["CRYPTO"]),
   symbol: z.string().min(2).max(20),
   timeframe: z.enum(ALL_TIMEFRAMES as [string, ...string[]]),
   limit: z.coerce.number().int().min(50).max(1000).optional(),
