@@ -103,17 +103,31 @@ type NewsItem = {
   sentiment: string | null;
 };
 
-type SpotPortfolio = {
+type Portfolio = {
   brokers: Array<{
     broker: "BITGET" | "BINANCE";
-    totalUsd: number;
-    assets: Array<{ coin: string; total: number; usdValue: number }>;
-    otherCount: number;
-    otherUsd: number;
-    dustCount: number;
-    unpricedCount: number;
-    error?: string;
+    spot: {
+      totalUsd: number;
+      assets: Array<{ coin: string; total: number; usdValue: number }>;
+      otherCount: number;
+      otherUsd: number;
+      dustCount: number;
+      unpricedCount: number;
+      error?: string;
+    };
+    futures: {
+      equity: number;
+      available: number;
+      unrealizedPnl: number;
+      error?: string;
+    };
   }>;
+  totals: {
+    spotUsd: number;
+    futuresUsd: number;
+    totalUsd: number;
+    unrealizedPnl: number;
+  };
   fetchedAt: string;
 };
 
@@ -153,14 +167,14 @@ export function DashboardClient() {
     refetchIntervalInBackground: false,
   });
 
-  // Read-only spot holdings across connected brokers. Server caches 60s;
-  // no card when no broker is connected (empty brokers array).
-  const spot = useQuery<SpotPortfolio | null>({
-    queryKey: ["dashboard", "spot"],
+  // Read-only unified portfolio (spot + futures, all brokers). Server
+  // caches 60s; no card when no broker is connected (empty brokers array).
+  const portfolio = useQuery<Portfolio | null>({
+    queryKey: ["dashboard", "portfolio"],
     queryFn: async ({ signal }) => {
-      const res = await fetch("/api/brokers/spot-balances", { signal });
+      const res = await fetch("/api/brokers/portfolio", { signal });
       if (!res.ok) return null;
-      return (await res.json()) as SpotPortfolio;
+      return (await res.json()) as Portfolio;
     },
     refetchInterval: 2 * 60_000,
     refetchIntervalInBackground: false,
@@ -339,38 +353,26 @@ export function DashboardClient() {
 
         {/* ── Right column ─────────────────────────────────────────── */}
         <div className="space-y-4">
-          {/* Bitget snapshot — only when connected */}
+          {/* Unified money hub: spot + futures across all connected
+              brokers, one grand total. Read-only. */}
+          {portfolio.data && portfolio.data.brokers.length > 0 ? (
+            <PortfolioCard data={portfolio.data} />
+          ) : null}
+
+          {/* Live Bitget positions. Balance/PnL rows removed — the money
+              numbers live in PortfolioCard above; two cards sampling the
+              same wallet on different clocks showed contradictory values. */}
           {bitget.data ? (
             <Card>
               <CardHeader>
-                <CardTitle className="text-base">Bitget Futures</CardTitle>
-                <CardDescription>Số dư & vị thế trực tiếp.</CardDescription>
+                <CardTitle className="text-base">Vị thế Bitget</CardTitle>
+                <CardDescription>
+                  Vị thế futures đang mở, trực tiếp từ sàn.
+                </CardDescription>
               </CardHeader>
               <CardContent className="space-y-2 text-sm">
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Khả dụng</span>
-                  <span className="font-mono">
-                    {fmt(bitget.data.balance.available)}{" "}
-                    {bitget.data.balance.marginCoin}
-                  </span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">PnL chưa chốt</span>
-                  <span
-                    className={cn(
-                      "font-mono",
-                      (bitget.data.balance.unrealizedPnl ?? 0) > 0 &&
-                        "text-bullish",
-                      (bitget.data.balance.unrealizedPnl ?? 0) < 0 &&
-                        "text-bearish",
-                    )}
-                  >
-                    {(bitget.data.balance.unrealizedPnl ?? 0) >= 0 ? "+" : ""}
-                    {fmt(bitget.data.balance.unrealizedPnl)}
-                  </span>
-                </div>
                 {positions.length > 0 ? (
-                  <div className="mt-2 space-y-1 border-t pt-2">
+                  <div className="space-y-1">
                     {positions.map((p) => (
                       <div
                         key={`${p.symbol}-${p.side}`}
@@ -403,78 +405,6 @@ export function DashboardClient() {
                     Không có vị thế đang mở.
                   </p>
                 )}
-              </CardContent>
-            </Card>
-          ) : null}
-
-          {/* Spot holdings (read-only) — only when a broker is connected */}
-          {spot.data && spot.data.brokers.length > 0 ? (
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-base">Tài sản Spot</CardTitle>
-                <CardDescription>
-                  Số dư ví spot (chỉ xem) · làm mới mỗi 2 phút.
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-3 text-sm">
-                {spot.data.brokers.map((b) => (
-                  <div key={b.broker} className="space-y-1">
-                    <div className="flex items-center justify-between">
-                      <span className="font-medium">
-                        {b.broker === "BITGET" ? "Bitget" : "Binance"}
-                      </span>
-                      {b.error ? null : (
-                        <span className="font-mono">
-                          ≈ {fmt(b.totalUsd)} USDT
-                        </span>
-                      )}
-                    </div>
-                    {b.error ? (
-                      <p className="text-xs text-muted-foreground">
-                        {b.error}
-                      </p>
-                    ) : b.assets.length === 0 ? (
-                      <p className="text-xs text-muted-foreground">
-                        {b.dustCount + b.unpricedCount > 0
-                          ? `Không có coin ≥ $1 (${b.dustCount} bụi, ${b.unpricedCount} không định giá được).`
-                          : "Ví spot trống."}
-                      </p>
-                    ) : (
-                      <div className="space-y-0.5">
-                        {b.assets.map((a) => (
-                          <div
-                            key={a.coin}
-                            className="flex items-center justify-between text-xs"
-                          >
-                            <span className="font-mono">{a.coin}</span>
-                            <span className="font-mono text-muted-foreground">
-                              {a.total.toLocaleString("en-US", {
-                                maximumFractionDigits: 6,
-                              })}{" "}
-                              · ≈ {fmt(a.usdValue)}
-                            </span>
-                          </div>
-                        ))}
-                        {b.otherCount > 0 ? (
-                          <p className="pt-0.5 text-[11px] text-muted-foreground">
-                            + {b.otherCount} coin khác ≈ {fmt(b.otherUsd)}
-                          </p>
-                        ) : null}
-                        {b.dustCount > 0 ? (
-                          <p className="pt-0.5 text-[11px] text-muted-foreground">
-                            + {b.dustCount} coin bụi &lt; $1 (đã ẩn)
-                          </p>
-                        ) : null}
-                        {b.unpricedCount > 0 ? (
-                          <p className="pt-0.5 text-[11px] text-muted-foreground">
-                            + {b.unpricedCount} coin không định giá được (thiếu
-                            cặp USDT)
-                          </p>
-                        ) : null}
-                      </div>
-                    )}
-                  </div>
-                ))}
               </CardContent>
             </Card>
           ) : null}
@@ -579,5 +509,160 @@ export function DashboardClient() {
         </div>
       </div>
     </>
+  );
+}
+
+/**
+ * Money hub — spot + futures across every connected broker, one total.
+ * Everything read-only; per-section errors render inline so one broken
+ * key never blanks the whole card.
+ */
+function PortfolioCard({ data }: { data: Portfolio }) {
+  const pnl = data.totals.unrealizedPnl;
+  // A dead/revoked key zeroes its sections (error string set) — the zeros
+  // must NOT read as "tiền đã mất". Flag the totals and blank the broker
+  // header instead of presenting 0.00 as authoritative.
+  const hasError = data.brokers.some((b) => b.spot.error || b.futures.error);
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">Tổng tài sản</CardTitle>
+        <CardDescription>
+          Spot + Futures (USDT-M) mọi sàn đã kết nối (chỉ xem).
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3 text-sm">
+        <div className="rounded-md border bg-card/40 p-3">
+          <div className="flex items-baseline justify-between">
+            <span className="text-xs text-muted-foreground">
+              Tổng cộng
+              {hasError ? (
+                <span className="text-amber-600 dark:text-amber-400">
+                  {" "}
+                  (thiếu dữ liệu — xem lỗi bên dưới)
+                </span>
+              ) : null}
+            </span>
+            <span className="font-mono text-lg font-semibold">
+              ≈ {fmt(data.totals.totalUsd)} USDT
+            </span>
+          </div>
+          <div className="mt-1 flex items-center justify-between text-[11px] text-muted-foreground">
+            <span>
+              Futures {fmt(data.totals.futuresUsd)} · Spot{" "}
+              {fmt(data.totals.spotUsd)}
+            </span>
+            <span
+              className={cn(
+                "font-mono",
+                pnl > 0 && "text-bullish",
+                pnl < 0 && "text-bearish",
+              )}
+            >
+              PnL {pnl >= 0 ? "+" : ""}
+              {fmt(pnl)}
+            </span>
+          </div>
+        </div>
+
+        {data.brokers.map((b) => {
+          const name = b.broker === "BITGET" ? "Bitget" : "Binance";
+          const brokerErrored = Boolean(b.spot.error || b.futures.error);
+          const brokerTotal = b.spot.totalUsd + b.futures.equity;
+          return (
+            <div key={b.broker} className="space-y-1 border-t pt-2.5">
+              <div className="flex items-center justify-between">
+                <span className="font-medium">{name}</span>
+                <span className="font-mono text-xs">
+                  {brokerErrored ? "—" : <>≈ {fmt(brokerTotal)} USDT</>}
+                </span>
+              </div>
+
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-muted-foreground">
+                  Futures (USDT-M)
+                </span>
+                {b.futures.error ? (
+                  <span className="text-muted-foreground">—</span>
+                ) : (
+                  <span className="font-mono">
+                    {fmt(b.futures.equity)}
+                    {b.futures.unrealizedPnl !== 0 ? (
+                      <span
+                        className={cn(
+                          "ml-1.5",
+                          b.futures.unrealizedPnl > 0 && "text-bullish",
+                          b.futures.unrealizedPnl < 0 && "text-bearish",
+                        )}
+                      >
+                        ({b.futures.unrealizedPnl > 0 ? "+" : ""}
+                        {fmt(b.futures.unrealizedPnl)})
+                      </span>
+                    ) : null}
+                  </span>
+                )}
+              </div>
+              {b.futures.error ? (
+                <p className="text-[11px] text-muted-foreground">
+                  {b.futures.error}
+                </p>
+              ) : null}
+
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-muted-foreground">Spot</span>
+                {b.spot.error ? (
+                  <span className="text-muted-foreground">—</span>
+                ) : (
+                  <span className="font-mono">{fmt(b.spot.totalUsd)}</span>
+                )}
+              </div>
+              {b.spot.error ? (
+                <p className="text-[11px] text-muted-foreground">
+                  {b.spot.error}
+                </p>
+              ) : b.spot.assets.length === 0 ? (
+                <p className="pl-3 text-[11px] text-muted-foreground">
+                  {b.spot.dustCount + b.spot.unpricedCount > 0
+                    ? `Không có coin ≥ $1 (${b.spot.dustCount} bụi, ${b.spot.unpricedCount} không định giá được).`
+                    : "Ví spot trống."}
+                </p>
+              ) : (
+                <div className="space-y-0.5 pl-3">
+                  {b.spot.assets.map((a) => (
+                    <div
+                      key={a.coin}
+                      className="flex items-center justify-between text-[11px]"
+                    >
+                      <span className="font-mono">{a.coin}</span>
+                      <span className="font-mono text-muted-foreground">
+                        {a.total.toLocaleString("en-US", {
+                          maximumFractionDigits: 6,
+                        })}{" "}
+                        · ≈ {fmt(a.usdValue)}
+                      </span>
+                    </div>
+                  ))}
+                  {b.spot.otherCount > 0 ? (
+                    <p className="text-[11px] text-muted-foreground">
+                      + {b.spot.otherCount} coin khác ≈ {fmt(b.spot.otherUsd)}
+                    </p>
+                  ) : null}
+                  {b.spot.dustCount > 0 ? (
+                    <p className="text-[11px] text-muted-foreground">
+                      + {b.spot.dustCount} coin bụi &lt; $1 (đã ẩn)
+                    </p>
+                  ) : null}
+                  {b.spot.unpricedCount > 0 ? (
+                    <p className="text-[11px] text-muted-foreground">
+                      + {b.spot.unpricedCount} coin không định giá được
+                    </p>
+                  ) : null}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </CardContent>
+    </Card>
   );
 }

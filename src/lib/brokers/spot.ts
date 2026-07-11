@@ -1,14 +1,16 @@
 /**
- * Spot portfolio aggregation (READ-ONLY).
+ * Unified portfolio aggregation (READ-ONLY) — "một nơi quản lý dòng tiền".
  *
- * Pulls spot balances from every connected broker, values them in USDT via
- * each exchange's own PUBLIC bulk-ticker endpoint (one call per exchange,
- * no key, no quota), and returns a per-broker breakdown.
+ * For every connected broker, pulls BOTH wallets in parallel:
+ *   - spot balances, valued in USDT via the exchange's PUBLIC bulk ticker
+ *     (one call per exchange, no key, no quota)
+ *   - futures account equity (existing signed read used by the broker cards)
+ * and returns a per-broker spot/futures breakdown plus grand totals.
  *
- * Per-user in-process cache (60s): the dashboard polls, and balances/prices
- * don't move enough for a tighter TTL to matter. One broker failing (e.g.
- * key lacks spot read scope) degrades to an error string on that broker
- * only — the other broker still renders.
+ * Per-user in-process cache (60s) + in-flight coalescing: the dashboard
+ * polls, and balances/prices don't move enough for a tighter TTL to matter.
+ * One section failing (e.g. key lacks spot read scope) degrades to an error
+ * string on that section only — everything else still renders.
  */
 
 import "server-only";
@@ -16,11 +18,13 @@ import "server-only";
 import { loadCreds } from "@/lib/brokers/store";
 import {
   getSpotAssets,
+  getAccountBalance as getBitgetFuturesBalance,
   BitgetError,
   type BitgetCreds,
 } from "@/lib/brokers/bitget";
 import {
   getSpotBalances,
+  getAccountBalance as getBinanceFuturesBalance,
   BinanceError,
   type BinanceCreds,
 } from "@/lib/brokers/binance";
@@ -49,8 +53,28 @@ export type BrokerSpot = {
   error?: string;
 };
 
-export type SpotPortfolio = {
-  brokers: BrokerSpot[];
+export type FuturesSnapshot = {
+  /** wallet + unrealized PnL, in the margin coin (USDT) */
+  equity: number;
+  available: number;
+  unrealizedPnl: number;
+  error?: string;
+};
+
+export type BrokerPortfolio = {
+  broker: "BITGET" | "BINANCE";
+  spot: BrokerSpot;
+  futures: FuturesSnapshot;
+};
+
+export type Portfolio = {
+  brokers: BrokerPortfolio[];
+  totals: {
+    spotUsd: number;
+    futuresUsd: number;
+    totalUsd: number;
+    unrealizedPnl: number;
+  };
   fetchedAt: string;
 };
 
@@ -58,11 +82,11 @@ const DUST_USD = 1;
 const MAX_ASSETS = 10;
 const CACHE_TTL_MS = 60_000;
 
-const cache = new Map<string, { at: number; data: SpotPortfolio }>();
+const cache = new Map<string, { at: number; data: Portfolio }>();
 // Coalesce concurrent misses: without this, N parallel requests inside the
 // same 60s window each fan out to the exchanges (the rate limit allows 20/min,
 // which would otherwise defeat the cache entirely).
-const inflight = new Map<string, Promise<SpotPortfolio>>();
+const inflight = new Map<string, Promise<Portfolio>>();
 
 // ─── Public bulk tickers (no key) ───────────────────────────────────────
 // Tickers are user-independent — cache them module-wide so many users
@@ -247,11 +271,45 @@ async function fetchBinanceSpot(creds: BinanceCreds): Promise<BrokerSpot> {
   }
 }
 
+// ─── Futures side ───────────────────────────────────────────────────────
+
+async function fetchBitgetFutures(
+  creds: BitgetCreds,
+): Promise<FuturesSnapshot> {
+  try {
+    const b = await getBitgetFuturesBalance(creds);
+    return {
+      equity: b.equity,
+      available: b.available,
+      unrealizedPnl: b.unrealizedPnl,
+    };
+  } catch (e) {
+    const error =
+      e instanceof BitgetError ? e.toVietnamese() : errorText(e, "Bitget");
+    return { equity: 0, available: 0, unrealizedPnl: 0, error };
+  }
+}
+
+async function fetchBinanceFutures(
+  creds: BinanceCreds,
+): Promise<FuturesSnapshot> {
+  try {
+    const b = await getBinanceFuturesBalance(creds);
+    return {
+      equity: b.equity,
+      available: b.available,
+      unrealizedPnl: b.unrealizedPnl,
+    };
+  } catch (e) {
+    const error =
+      e instanceof BinanceError ? e.toVietnamese() : errorText(e, "Binance");
+    return { equity: 0, available: 0, unrealizedPnl: 0, error };
+  }
+}
+
 // ─── Entry point ────────────────────────────────────────────────────────
 
-export async function getSpotPortfolio(
-  userId: string,
-): Promise<SpotPortfolio> {
+export async function getPortfolio(userId: string): Promise<Portfolio> {
   const hit = cache.get(userId);
   if (hit && Date.now() - hit.at < CACHE_TTL_MS) return hit.data;
 
@@ -265,12 +323,40 @@ export async function getSpotPortfolio(
       loadCreds<BinanceCreds>(userId, "BINANCE"),
     ]);
 
-    const jobs: Promise<BrokerSpot>[] = [];
-    if (bitgetCreds) jobs.push(fetchBitgetSpot(bitgetCreds));
-    if (binanceCreds) jobs.push(fetchBinanceSpot(binanceCreds));
+    const jobs: Promise<BrokerPortfolio>[] = [];
+    if (bitgetCreds) {
+      jobs.push(
+        Promise.all([
+          fetchBitgetSpot(bitgetCreds),
+          fetchBitgetFutures(bitgetCreds),
+        ]).then(([spot, futures]) => ({ broker: "BITGET" as const, spot, futures })),
+      );
+    }
+    if (binanceCreds) {
+      jobs.push(
+        Promise.all([
+          fetchBinanceSpot(binanceCreds),
+          fetchBinanceFutures(binanceCreds),
+        ]).then(([spot, futures]) => ({ broker: "BINANCE" as const, spot, futures })),
+      );
+    }
 
-    const data: SpotPortfolio = {
-      brokers: await Promise.all(jobs),
+    const brokers = await Promise.all(jobs);
+    // Grand totals skip errored sections (their numbers are zeroed anyway);
+    // per-section error strings tell the card what's missing from the sum.
+    const spotUsd = brokers.reduce((s, b) => s + b.spot.totalUsd, 0);
+    const futuresUsd = brokers.reduce((s, b) => s + b.futures.equity, 0);
+    const data: Portfolio = {
+      brokers,
+      totals: {
+        spotUsd,
+        futuresUsd,
+        totalUsd: spotUsd + futuresUsd,
+        unrealizedPnl: brokers.reduce(
+          (s, b) => s + b.futures.unrealizedPnl,
+          0,
+        ),
+      },
       fetchedAt: new Date().toISOString(),
     };
 
