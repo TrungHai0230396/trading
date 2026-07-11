@@ -3,7 +3,6 @@
 import * as React from "react";
 import { toast } from "sonner";
 import {
-  Copy,
   Eye,
   EyeOff,
   Loader2,
@@ -489,49 +488,6 @@ export function BitgetBrokerCard() {
   );
 }
 
-/**
- * The app's public egress IP — what users must whitelist on their exchange
- * API keys. Inline in the key guides so nobody has to ask "IP nào?"; click
- * to copy. Fetched once per mount (server caches the lookup 10 min).
- */
-function ServerIpHint() {
-  // undefined = loading, null = could not detect
-  const [ip, setIp] = React.useState<string | null | undefined>(undefined);
-  React.useEffect(() => {
-    fetch("/api/brokers/server-ip")
-      .then((r) => r.json())
-      .then((d: { ip?: string | null }) => setIp(d.ip ?? null))
-      .catch(() => setIp(null));
-  }, []);
-
-  if (ip === undefined) {
-    return <span className="text-muted-foreground">(đang lấy IP…)</span>;
-  }
-  if (!ip) {
-    return (
-      <span className="text-muted-foreground">
-        (không xác định được IP — thử tải lại trang)
-      </span>
-    );
-  }
-  return (
-    <button
-      type="button"
-      title="Bấm để copy"
-      onClick={() => {
-        navigator.clipboard
-          .writeText(ip)
-          .then(() => toast.success(`Đã copy ${ip}`))
-          .catch(() => toast.error("Không copy được — chọn và copy tay."));
-      }}
-      className="inline-flex items-center gap-1 rounded border bg-muted px-1.5 py-0.5 font-mono text-[11px] text-foreground transition hover:bg-accent"
-    >
-      {ip}
-      <Copy className="size-3" />
-    </button>
-  );
-}
-
 type SpotMini = {
   totalUsd: number;
   assets: Array<{ coin: string; total: number; usdValue: number }>;
@@ -658,10 +614,7 @@ function BitgetGuide() {
           mặc định không đặt lệnh hộ bạn.
         </li>
         <li>
-          Ô <strong>IP whitelist</strong>: thêm IP máy chủ của app:{" "}
-          <ServerIpHint />. Thiếu IP này Bitget báo lỗi 40018 (&quot;IP chưa
-          được whitelist&quot;) — khi đó vào sửa key, thêm IP mới rồi lưu là
-          hết.
+          Ô <strong>IP whitelist</strong>: để trống (không bắt buộc).
         </li>
         <li>
           Submit → copy <strong>API Key</strong> + <strong>Secret Key</strong>{" "}
@@ -1275,9 +1228,8 @@ export function BinanceBrokerCard() {
                   Futures/Withdraw — app mặc định không đặt lệnh hộ bạn.
                 </li>
                 <li>
-                  Chọn <strong>Restrict access to trusted IPs</strong> và thêm
-                  IP máy chủ của app: <ServerIpHint /> — bắt buộc để quyền
-                  Futures hoạt động ổn định.
+                  IP access: chọn <strong>Unrestricted</strong> — key chỉ đọc
+                  không cần whitelist IP.
                 </li>
                 <li>
                   Copy <strong>API Key</strong> + <strong>Secret Key</strong>{" "}
