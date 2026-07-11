@@ -103,6 +103,20 @@ type NewsItem = {
   sentiment: string | null;
 };
 
+type SpotPortfolio = {
+  brokers: Array<{
+    broker: "BITGET" | "BINANCE";
+    totalUsd: number;
+    assets: Array<{ coin: string; total: number; usdValue: number }>;
+    otherCount: number;
+    otherUsd: number;
+    dustCount: number;
+    unpricedCount: number;
+    error?: string;
+  }>;
+  fetchedAt: string;
+};
+
 export function DashboardClient() {
   const dash = useQuery<DashboardData>({
     queryKey: ["dashboard"],
@@ -136,6 +150,19 @@ export function DashboardClient() {
       return (await res.json()) as BitgetAccount;
     },
     refetchInterval: 60_000,
+    refetchIntervalInBackground: false,
+  });
+
+  // Read-only spot holdings across connected brokers. Server caches 60s;
+  // no card when no broker is connected (empty brokers array).
+  const spot = useQuery<SpotPortfolio | null>({
+    queryKey: ["dashboard", "spot"],
+    queryFn: async ({ signal }) => {
+      const res = await fetch("/api/brokers/spot-balances", { signal });
+      if (!res.ok) return null;
+      return (await res.json()) as SpotPortfolio;
+    },
+    refetchInterval: 2 * 60_000,
     refetchIntervalInBackground: false,
   });
 
@@ -376,6 +403,78 @@ export function DashboardClient() {
                     Không có vị thế đang mở.
                   </p>
                 )}
+              </CardContent>
+            </Card>
+          ) : null}
+
+          {/* Spot holdings (read-only) — only when a broker is connected */}
+          {spot.data && spot.data.brokers.length > 0 ? (
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base">Tài sản Spot</CardTitle>
+                <CardDescription>
+                  Số dư ví spot (chỉ xem) · làm mới mỗi 2 phút.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-3 text-sm">
+                {spot.data.brokers.map((b) => (
+                  <div key={b.broker} className="space-y-1">
+                    <div className="flex items-center justify-between">
+                      <span className="font-medium">
+                        {b.broker === "BITGET" ? "Bitget" : "Binance"}
+                      </span>
+                      {b.error ? null : (
+                        <span className="font-mono">
+                          ≈ {fmt(b.totalUsd)} USDT
+                        </span>
+                      )}
+                    </div>
+                    {b.error ? (
+                      <p className="text-xs text-muted-foreground">
+                        {b.error}
+                      </p>
+                    ) : b.assets.length === 0 ? (
+                      <p className="text-xs text-muted-foreground">
+                        {b.dustCount + b.unpricedCount > 0
+                          ? `Không có coin ≥ $1 (${b.dustCount} bụi, ${b.unpricedCount} không định giá được).`
+                          : "Ví spot trống."}
+                      </p>
+                    ) : (
+                      <div className="space-y-0.5">
+                        {b.assets.map((a) => (
+                          <div
+                            key={a.coin}
+                            className="flex items-center justify-between text-xs"
+                          >
+                            <span className="font-mono">{a.coin}</span>
+                            <span className="font-mono text-muted-foreground">
+                              {a.total.toLocaleString("en-US", {
+                                maximumFractionDigits: 6,
+                              })}{" "}
+                              · ≈ {fmt(a.usdValue)}
+                            </span>
+                          </div>
+                        ))}
+                        {b.otherCount > 0 ? (
+                          <p className="pt-0.5 text-[11px] text-muted-foreground">
+                            + {b.otherCount} coin khác ≈ {fmt(b.otherUsd)}
+                          </p>
+                        ) : null}
+                        {b.dustCount > 0 ? (
+                          <p className="pt-0.5 text-[11px] text-muted-foreground">
+                            + {b.dustCount} coin bụi &lt; $1 (đã ẩn)
+                          </p>
+                        ) : null}
+                        {b.unpricedCount > 0 ? (
+                          <p className="pt-0.5 text-[11px] text-muted-foreground">
+                            + {b.unpricedCount} coin không định giá được (thiếu
+                            cặp USDT)
+                          </p>
+                        ) : null}
+                      </div>
+                    )}
+                  </div>
+                ))}
               </CardContent>
             </Card>
           ) : null}

@@ -804,3 +804,44 @@ export async function getOpenPositions(
       marginMode: r.marginMode,
     }));
 }
+
+// ──────────────────────────────────────────────────────────────────────
+// Spot (READ-ONLY) — balances for the portfolio card. No spot trading
+// anywhere in the app; this is the only spot surface.
+// ──────────────────────────────────────────────────────────────────────
+
+export type SpotAssetRow = {
+  coin: string;
+  /** available + frozen + locked */
+  total: number;
+};
+
+/**
+ * Requires the API key to have Spot read scope. Keys created futures-only
+ * throw a Bitget permission error — the caller shows a "grant Spot read"
+ * hint instead of failing the whole portfolio.
+ */
+export async function getSpotAssets(
+  creds: BitgetCreds,
+): Promise<SpotAssetRow[]> {
+  const rows = await signedGet<
+    Array<{
+      coin: string;
+      available: string;
+      frozen: string;
+      locked: string;
+    }>
+  >(creds, "/api/v2/spot/account/assets");
+
+  const num = (v: string): number => {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : 0;
+  };
+
+  return rows
+    .map((r) => ({
+      coin: r.coin.toUpperCase(),
+      total: num(r.available) + num(r.frozen) + num(r.locked),
+    }))
+    .filter((r) => r.total > 0);
+}

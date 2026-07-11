@@ -25,6 +25,8 @@ import type {
 } from "@/lib/brokers/bitget";
 
 const BASE = "https://fapi.binance.com";
+// Spot lives on a different host; same key/secret, same HMAC signing.
+const SPOT_BASE = "https://api.binance.com";
 
 export type BinanceCreds = {
   apiKey: string;
@@ -90,6 +92,7 @@ async function signedRequest<T>(
   method: "GET" | "POST" | "DELETE",
   path: string,
   params: Record<string, string | number | boolean> = {},
+  base: string = BASE,
 ): Promise<T> {
   const qs = new URLSearchParams();
   for (const [k, v] of Object.entries(params)) qs.set(k, String(v));
@@ -97,7 +100,7 @@ async function signedRequest<T>(
   qs.set("recvWindow", "5000");
   const query = qs.toString();
   const signature = sign(query, creds.secret);
-  const url = `${BASE}${path}?${query}&signature=${signature}`;
+  const url = `${base}${path}?${query}&signature=${signature}`;
 
   const res = await fetch(url, {
     method,
@@ -705,4 +708,35 @@ export async function getCloseSummary(
     totalFunding: funding,
     lastFillAt: lastFill > 0 ? new Date(lastFill) : null,
   };
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// Spot (READ-ONLY) — balances for the portfolio card. Uses the spot host;
+// needs the key's "Enable Reading" permission (on by default).
+// ──────────────────────────────────────────────────────────────────────
+
+export type SpotAssetRow = {
+  asset: string;
+  /** free + locked */
+  total: number;
+};
+
+export async function getSpotBalances(
+  creds: BinanceCreds,
+): Promise<SpotAssetRow[]> {
+  const acct = await signedRequest<{
+    balances: Array<{ asset: string; free: string; locked: string }>;
+  }>(creds, "GET", "/api/v3/account", {}, SPOT_BASE);
+
+  const num = (v: string): number => {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : 0;
+  };
+
+  return (acct.balances ?? [])
+    .map((b) => ({
+      asset: b.asset.toUpperCase(),
+      total: num(b.free) + num(b.locked),
+    }))
+    .filter((b) => b.total > 0);
 }
