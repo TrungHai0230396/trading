@@ -13,7 +13,6 @@ import {
   BinanceBrokerCard,
   BitgetBrokerCard,
   ChangePasswordCard,
-  ConsensusAlertCard,
   MetaApiBrokerCard,
   RiskLimitsCard,
   TelegramNotifyCard,
@@ -65,7 +64,6 @@ export default async function SettingsPage() {
           <BinanceBrokerCard />
           <RiskLimitsCard />
           <TelegramNotifyCard />
-          <ConsensusAlertCard />
           <MetaApiBrokerCard />
         </TabsContent>
 

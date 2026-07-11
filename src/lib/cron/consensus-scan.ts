@@ -1,7 +1,7 @@
 /**
  * Scheduled watchlist consensus scan → Telegram alert.
  *
- * Per-user configurable (Settings → Sàn giao dịch → Tín hiệu đồng thuận):
+ * Per-user configurable (Quét đa khung → Watchlist → Khung mặc định & hướng báo):
  *   - which timeframes must ALL agree (default 1h/4h/1d/1w),
  *   - notify on bullish and/or bearish consensus,
  *   - on/off switch.

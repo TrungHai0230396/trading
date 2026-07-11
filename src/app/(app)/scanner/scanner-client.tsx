@@ -10,8 +10,10 @@ import {
   ExternalLink,
   Eye,
   EyeOff,
+  Loader2,
   Radar,
   Plus,
+  Settings2,
   Sparkles,
   X,
 } from "lucide-react";
@@ -36,6 +38,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import {
   Table,
@@ -1554,6 +1557,16 @@ function useWatchlist() {
   return { list, add, remove };
 }
 
+// Global consensus-alert config — the full shape the API stores. Lives
+// here (not Settings) since the watchlist is where alerts are managed.
+type ConsensusAlertConfig = {
+  enabled: boolean;
+  timeframes: string[];
+  notifyBullish: boolean;
+  notifyBearish: boolean;
+  notifyBreak: boolean;
+};
+
 function WatchlistPanel() {
   const { list, add, remove } = useWatchlist();
   const queryClient = useQueryClient();
@@ -1561,12 +1574,12 @@ function WatchlistPanel() {
   const items = list.data?.items ?? [];
 
   // Default TF set (global consensus config) + per-coin overrides.
-  const config = useQuery<{ config: { timeframes: string[] } }>({
+  const config = useQuery<{ config: ConsensusAlertConfig }>({
     queryKey: ["consensus-config"],
     queryFn: async () => {
       const res = await fetch("/api/notify/consensus-config");
       if (!res.ok) throw new Error("config");
-      return (await res.json()) as { config: { timeframes: string[] } };
+      return (await res.json()) as { config: ConsensusAlertConfig };
     },
     staleTime: 5 * 60_000,
   });
@@ -1673,12 +1686,235 @@ function WatchlistPanel() {
             ))}
           </div>
         )}
+        <ConsensusConfigSection config={config.data?.config ?? null} />
         <p className="text-[11px] leading-relaxed text-muted-foreground">
-          Mặc định canh {defaultTfs.join("·")} (đổi ở Cài đặt → Tín hiệu
-          đồng thuận). Bấm khung trên mỗi coin để đặt riêng.
+          Bấm khung trên từng coin để đặt riêng thay cho khung mặc định.
         </p>
       </CardContent>
     </Card>
+  );
+}
+
+/**
+ * Global alert config (default TF set + directions + on/off), inline in the
+ * watchlist panel — moved here from Settings so everything consensus-alert
+ * lives in one place. Collapsed to a one-line summary until opened.
+ */
+function ConsensusConfigSection({
+  config,
+}: {
+  config: ConsensusAlertConfig | null;
+}) {
+  const queryClient = useQueryClient();
+  const [open, setOpen] = React.useState(false);
+  const [draft, setDraft] = React.useState<ConsensusAlertConfig | null>(null);
+  const [saving, setSaving] = React.useState(false);
+
+  // Alerts deliver via Telegram only — warn instead of letting the user
+  // configure signals that silently go nowhere. (The old Settings card
+  // hid itself entirely; a visible hint is more actionable.)
+  const telegram = useQuery<{ connected?: boolean }>({
+    queryKey: ["telegram-status"],
+    queryFn: async () => {
+      const res = await fetch("/api/notify/telegram");
+      if (!res.ok) return {};
+      return (await res.json()) as { connected?: boolean };
+    },
+    // Always re-check on mount: the Settings card saves via raw fetch and
+    // can't invalidate this cache, so a staleTime would keep showing "chưa
+    // kết nối" after the user follows the link and connects Telegram.
+    refetchOnMount: "always",
+  });
+
+  if (!config) return null;
+
+  const openEditor = () => {
+    setDraft({ ...config, timeframes: [...config.timeframes] });
+    setOpen(true);
+  };
+
+  const toggleTf = (tf: Timeframe) =>
+    setDraft((d) =>
+      d
+        ? {
+            ...d,
+            timeframes: d.timeframes.includes(tf)
+              ? d.timeframes.filter((t) => t !== tf)
+              : // Keep chronological order by re-filtering the master list.
+                ALERT_TFS.filter(
+                  (t) => d.timeframes.includes(t as Timeframe) || t === tf,
+                ),
+          }
+        : d,
+    );
+
+  const save = async () => {
+    if (!draft) return;
+    if (draft.timeframes.length < 1) {
+      toast.error("Chọn ít nhất 1 khung.");
+      return;
+    }
+    if (!draft.notifyBullish && !draft.notifyBearish) {
+      toast.error("Bật ít nhất một hướng (Bullish hoặc Bearish).");
+      return;
+    }
+    setSaving(true);
+    try {
+      const res = await fetch("/api/notify/consensus-config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(draft),
+      });
+      const d = (await res.json().catch(() => null)) as {
+        error?: string;
+      } | null;
+      if (!res.ok) {
+        toast.error(d?.error ?? `Lỗi ${res.status}`);
+        return;
+      }
+      toast.success(
+        `Đã lưu: canh ${draft.timeframes.join("·")} · ${[
+          draft.notifyBullish ? "Bullish" : null,
+          draft.notifyBearish ? "Bearish" : null,
+        ]
+          .filter(Boolean)
+          .join(" + ")}`,
+      );
+      queryClient.invalidateQueries({ queryKey: ["consensus-config"] });
+      setOpen(false);
+    } catch {
+      // fetch itself rejected (offline / server unreachable) — without this
+      // the spinner just stops silently and the user assumes it saved.
+      toast.error("Không gửi được yêu cầu — kiểm tra kết nối mạng.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const summary = config.enabled
+    ? `${config.timeframes.join("·")} ${[
+        config.notifyBullish ? "📈" : null,
+        config.notifyBearish ? "📉" : null,
+        config.notifyBreak ? "⚠️" : null,
+      ]
+        .filter(Boolean)
+        .join("")}`
+    : "đang tắt";
+
+  return (
+    <div className="rounded-md border bg-card/40 p-2">
+      {telegram.data?.connected === false ? (
+        <p className="mb-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-2 py-1.5 text-[11px] text-amber-600 dark:text-amber-400">
+          Chưa kết nối Telegram — tín hiệu sẽ không gửi được.{" "}
+          <Link href="/settings" className="font-medium underline">
+            Kết nối ở Cài đặt
+          </Link>
+          .
+        </p>
+      ) : null}
+      <button
+        type="button"
+        onClick={() => (open ? setOpen(false) : openEditor())}
+        className="flex w-full items-center justify-between gap-2 text-left"
+      >
+        <span className="flex items-center gap-1.5 text-xs font-medium">
+          <Settings2 className="size-3.5 text-muted-foreground" />
+          Khung mặc định &amp; hướng báo
+        </span>
+        <span className="font-mono text-[10px] text-muted-foreground">
+          {summary}
+        </span>
+      </button>
+
+      {open && draft ? (
+        <div className="mt-2 space-y-3 border-t pt-2">
+          <label className="flex cursor-pointer items-center justify-between gap-2">
+            <span className="text-xs">Bật tín hiệu đồng thuận</span>
+            <Switch
+              checked={draft.enabled}
+              onCheckedChange={(v) =>
+                setDraft((d) => (d ? { ...d, enabled: !!v } : d))
+              }
+            />
+          </label>
+
+          <div className="space-y-1">
+            <span className="text-[11px] text-muted-foreground">
+              Các khung phải cùng đồng thuận (coin không đặt riêng dùng bộ
+              này):
+            </span>
+            <div className="flex flex-wrap gap-1">
+              {ALERT_TFS.map((tf) => {
+                const active = draft.timeframes.includes(tf);
+                return (
+                  <button
+                    key={tf}
+                    type="button"
+                    onClick={() => toggleTf(tf)}
+                    disabled={!draft.enabled}
+                    className={cn(
+                      "rounded-full border px-2.5 py-0.5 font-mono text-[11px] transition",
+                      active
+                        ? "border-primary bg-primary/15 text-primary"
+                        : "border-border bg-card/40 text-muted-foreground hover:text-foreground",
+                      !draft.enabled && "pointer-events-none opacity-50",
+                    )}
+                  >
+                    {tf}
+                  </button>
+                );
+              })}
+            </div>
+            <p className="text-[11px] text-muted-foreground">
+              Nhiều khung = hiếm tín hiệu nhưng chắc; 1 khung = nhạy, nhiều
+              tin hơn.
+            </p>
+          </div>
+
+          <div className="space-y-1.5">
+            {(
+              [
+                ["notifyBullish", "📈 Báo đồng thuận BULLISH"],
+                ["notifyBearish", "📉 Báo đồng thuận BEARISH"],
+                [
+                  "notifyBreak",
+                  "⚠️ Báo khi MẤT đồng thuận (tín hiệu thoát)",
+                ],
+              ] as const
+            ).map(([key, label]) => (
+              <label
+                key={key}
+                className="flex cursor-pointer items-center justify-between gap-2 rounded-md border bg-card/40 px-2.5 py-1.5"
+              >
+                <span className="text-xs">{label}</span>
+                <Switch
+                  checked={draft[key]}
+                  disabled={!draft.enabled}
+                  onCheckedChange={(v) =>
+                    setDraft((d) => (d ? { ...d, [key]: !!v } : d))
+                  }
+                />
+              </label>
+            ))}
+          </div>
+
+          <div className="flex gap-2">
+            <Button size="sm" onClick={save} disabled={saving}>
+              {saving ? <Loader2 className="size-4 animate-spin" /> : null}
+              Lưu
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => setOpen(false)}
+              disabled={saving}
+            >
+              Đóng
+            </Button>
+          </div>
+        </div>
+      ) : null}
+    </div>
   );
 }
 
