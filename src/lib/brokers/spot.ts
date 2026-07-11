@@ -16,6 +16,7 @@
 import "server-only";
 
 import { loadCreds } from "@/lib/brokers/store";
+import { getServerPublicIp } from "@/lib/server-ip";
 import {
   getSpotAssets,
   getAccountBalance as getBitgetFuturesBalance,
@@ -225,6 +226,20 @@ function errorText(e: unknown, exchange: string): string {
   return e instanceof Error ? e.message : "Lỗi không xác định";
 }
 
+/**
+ * IP-whitelist rejections are self-inflicted and fixable in one minute —
+ * IF the user knows which IP to add. Append it to the message so the
+ * dashboard error is directly actionable (Bitget 40018; Binance -2015
+ * bundles bad-key/IP/permission, where the IP is still the useful lead).
+ */
+async function withIpHint(msg: string, code: string): Promise<string> {
+  if (code !== "40018" && code !== "-2015") return msg;
+  const ip = await getServerPublicIp();
+  return ip
+    ? `${msg} IP hiện tại của máy chủ: ${ip} — thêm IP này vào whitelist của API key rồi lưu lại.`
+    : msg;
+}
+
 async function fetchBitgetSpot(creds: BitgetCreds): Promise<BrokerSpot> {
   try {
     const [rows, tickers] = await Promise.all([
@@ -234,6 +249,9 @@ async function fetchBitgetSpot(creds: BitgetCreds): Promise<BrokerSpot> {
     return { broker: "BITGET", ...valueHoldings(rows, tickers) };
   } catch (e) {
     if (e instanceof BitgetError) {
+      if (e.code === "40018") {
+        return emptyBroker("BITGET", await withIpHint(e.toVietnamese(), e.code));
+      }
       // Futures-only keys land here. Do NOT advise ticking Spot scope:
       // Bitget bundles Spot read with Trade (see testConnection note in
       // bitget.ts), so that advice would push users to over-privilege a
@@ -264,7 +282,10 @@ async function fetchBinanceSpot(creds: BinanceCreds): Promise<BrokerSpot> {
     if (e instanceof BinanceError) {
       return emptyBroker(
         "BINANCE",
-        `${e.toVietnamese()} Kiểm tra key đã bật "Enable Reading" chưa.`,
+        await withIpHint(
+          `${e.toVietnamese()} Kiểm tra key đã bật "Enable Reading" chưa.`,
+          e.code,
+        ),
       );
     }
     return emptyBroker("BINANCE", errorText(e, "Binance"));
@@ -285,7 +306,9 @@ async function fetchBitgetFutures(
     };
   } catch (e) {
     const error =
-      e instanceof BitgetError ? e.toVietnamese() : errorText(e, "Bitget");
+      e instanceof BitgetError
+        ? await withIpHint(e.toVietnamese(), e.code)
+        : errorText(e, "Bitget");
     return { equity: 0, available: 0, unrealizedPnl: 0, error };
   }
 }
@@ -302,7 +325,9 @@ async function fetchBinanceFutures(
     };
   } catch (e) {
     const error =
-      e instanceof BinanceError ? e.toVietnamese() : errorText(e, "Binance");
+      e instanceof BinanceError
+        ? await withIpHint(e.toVietnamese(), e.code)
+        : errorText(e, "Binance");
     return { equity: 0, available: 0, unrealizedPnl: 0, error };
   }
 }

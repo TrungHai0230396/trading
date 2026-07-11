@@ -208,7 +208,13 @@ export async function getAccountBalance(
   const rows = await signedGet<
     Array<{
       marginCoin: string;
-      equity: string;
+      // V2 has NO bare `equity` field — the account's worth arrives as
+      // accountEquity/usdtEquity. We parsed `equity` (always undefined → 0),
+      // so the UI showed "Equity 0.00" next to a non-zero "Khả dụng".
+      // Accept all spellings, prefer the documented one.
+      accountEquity?: string;
+      usdtEquity?: string;
+      equity?: string;
       available: string;
       locked: string;
       unrealizedPL: string;
@@ -235,7 +241,7 @@ export async function getAccountBalance(
   };
   return {
     marginCoin: usdt.marginCoin,
-    equity: safe(usdt.equity),
+    equity: safe(usdt.accountEquity ?? usdt.usdtEquity ?? usdt.equity),
     available: safe(usdt.available),
     used: safe(usdt.locked),
     unrealizedPnl: safe(usdt.unrealizedPL),

@@ -3,6 +3,7 @@
 import * as React from "react";
 import { toast } from "sonner";
 import {
+  Copy,
   Eye,
   EyeOff,
   Loader2,
@@ -391,6 +392,8 @@ export function BitgetBrokerCard() {
               )}
             </div>
 
+            <SpotMiniBlock broker="BITGET" />
+
             <div className="flex gap-2">
               <Button
                 variant="outline"
@@ -486,6 +489,142 @@ export function BitgetBrokerCard() {
   );
 }
 
+/**
+ * The app's public egress IP — what users must whitelist on their exchange
+ * API keys. Inline in the key guides so nobody has to ask "IP nào?"; click
+ * to copy. Fetched once per mount (server caches the lookup 10 min).
+ */
+function ServerIpHint() {
+  // undefined = loading, null = could not detect
+  const [ip, setIp] = React.useState<string | null | undefined>(undefined);
+  React.useEffect(() => {
+    fetch("/api/brokers/server-ip")
+      .then((r) => r.json())
+      .then((d: { ip?: string | null }) => setIp(d.ip ?? null))
+      .catch(() => setIp(null));
+  }, []);
+
+  if (ip === undefined) {
+    return <span className="text-muted-foreground">(đang lấy IP…)</span>;
+  }
+  if (!ip) {
+    return (
+      <span className="text-muted-foreground">
+        (không xác định được IP — thử tải lại trang)
+      </span>
+    );
+  }
+  return (
+    <button
+      type="button"
+      title="Bấm để copy"
+      onClick={() => {
+        navigator.clipboard
+          .writeText(ip)
+          .then(() => toast.success(`Đã copy ${ip}`))
+          .catch(() => toast.error("Không copy được — chọn và copy tay."));
+      }}
+      className="inline-flex items-center gap-1 rounded border bg-muted px-1.5 py-0.5 font-mono text-[11px] text-foreground transition hover:bg-accent"
+    >
+      {ip}
+      <Copy className="size-3" />
+    </button>
+  );
+}
+
+type SpotMini = {
+  totalUsd: number;
+  assets: Array<{ coin: string; total: number; usdValue: number }>;
+  otherCount: number;
+  otherUsd: number;
+  dustCount: number;
+  unpricedCount: number;
+  error?: string;
+};
+
+/**
+ * Compact spot-wallet block for the broker cards — same data the dashboard
+ * hub shows, served from the portfolio endpoint's 60s cache (no extra
+ * exchange calls). Read-only.
+ */
+function SpotMiniBlock({ broker }: { broker: "BITGET" | "BINANCE" }) {
+  // undefined = loading, null = not available (request failed)
+  const [spot, setSpot] = React.useState<SpotMini | null | undefined>(
+    undefined,
+  );
+
+  React.useEffect(() => {
+    fetch("/api/brokers/portfolio")
+      .then((r) => (r.ok ? r.json() : null))
+      .then(
+        (d: {
+          brokers?: Array<{ broker: string; spot: SpotMini }>;
+        } | null) => {
+          const row = d?.brokers?.find((b) => b.broker === broker);
+          setSpot(row ? row.spot : null);
+        },
+      )
+      .catch(() => setSpot(null));
+  }, [broker]);
+
+  const fmtUsd = (n: number) =>
+    n.toLocaleString("en-US", {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    });
+
+  return (
+    <div className="space-y-1.5 rounded-md border bg-card/40 p-3 text-sm">
+      <div className="flex items-center justify-between">
+        <span className="font-medium">Số dư Spot</span>
+        {spot && !spot.error ? (
+          <span className="font-mono text-xs">≈ {fmtUsd(spot.totalUsd)} USDT</span>
+        ) : null}
+      </div>
+      {spot === undefined ? (
+        <p className="text-xs text-muted-foreground">Đang tải…</p>
+      ) : spot === null ? (
+        <p className="text-xs text-muted-foreground">—</p>
+      ) : spot.error ? (
+        <p className="text-xs text-muted-foreground">{spot.error}</p>
+      ) : spot.assets.length === 0 ? (
+        <p className="text-xs text-muted-foreground">
+          {spot.dustCount + spot.unpricedCount > 0
+            ? `Không có coin ≥ $1 (${spot.dustCount} bụi, ${spot.unpricedCount} không định giá được).`
+            : "Ví spot trống."}
+        </p>
+      ) : (
+        <div className="space-y-0.5">
+          {spot.assets.map((a) => (
+            <div key={a.coin} className="flex justify-between text-xs">
+              <span className="font-mono">{a.coin}</span>
+              <span className="font-mono text-muted-foreground">
+                {a.total.toLocaleString("en-US", { maximumFractionDigits: 6 })}{" "}
+                · ≈ {fmtUsd(a.usdValue)}
+              </span>
+            </div>
+          ))}
+          {spot.otherCount > 0 ? (
+            <p className="text-[11px] text-muted-foreground">
+              + {spot.otherCount} coin khác ≈ {fmtUsd(spot.otherUsd)}
+            </p>
+          ) : null}
+          {spot.dustCount > 0 ? (
+            <p className="text-[11px] text-muted-foreground">
+              + {spot.dustCount} coin bụi &lt; $1 (đã ẩn)
+            </p>
+          ) : null}
+          {spot.unpricedCount > 0 ? (
+            <p className="text-[11px] text-muted-foreground">
+              + {spot.unpricedCount} coin không định giá được (thiếu cặp USDT)
+            </p>
+          ) : null}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function BitgetGuide() {
   return (
     <details className="rounded-md border bg-card/40 px-3 py-2 text-xs">
@@ -519,7 +658,10 @@ function BitgetGuide() {
           mặc định không đặt lệnh hộ bạn.
         </li>
         <li>
-          Nếu app deploy public, set IP whitelist. Nếu local, để IP máy bạn.
+          Ô <strong>IP whitelist</strong>: thêm IP máy chủ của app:{" "}
+          <ServerIpHint />. Thiếu IP này Bitget báo lỗi 40018 (&quot;IP chưa
+          được whitelist&quot;) — khi đó vào sửa key, thêm IP mới rồi lưu là
+          hết.
         </li>
         <li>
           Submit → copy <strong>API Key</strong> + <strong>Secret Key</strong>{" "}
@@ -1091,6 +1233,8 @@ export function BinanceBrokerCard() {
               )}
             </div>
 
+            <SpotMiniBlock broker="BINANCE" />
+
             <div className="flex gap-2">
               <Button variant="outline" size="sm" onClick={() => setEditing(true)}>
                 Đổi key
@@ -1131,8 +1275,9 @@ export function BinanceBrokerCard() {
                   Futures/Withdraw — app mặc định không đặt lệnh hộ bạn.
                 </li>
                 <li>
-                  Bắt buộc whitelist IP (Restrict access to trusted IPs) để
-                  quyền Futures hoạt động ổn định.
+                  Chọn <strong>Restrict access to trusted IPs</strong> và thêm
+                  IP máy chủ của app: <ServerIpHint /> — bắt buộc để quyền
+                  Futures hoạt động ổn định.
                 </li>
                 <li>
                   Copy <strong>API Key</strong> + <strong>Secret Key</strong>{" "}
