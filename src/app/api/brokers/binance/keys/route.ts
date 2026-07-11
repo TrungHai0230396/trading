@@ -16,6 +16,7 @@ import {
   getBrokerMeta,
 } from "@/lib/brokers/store";
 import { rateLimit } from "@/lib/brokers/rate-limit";
+import { invalidatePortfolio } from "@/lib/brokers/spot";
 import {
   testConnection,
   getAccountBalance,
@@ -73,6 +74,8 @@ export async function POST(req: Request) {
   const balance = await getAccountBalance(creds).catch(() => null);
 
   await saveCreds(userId, "BINANCE", creds);
+  // New key → the cached (possibly empty) portfolio is stale immediately.
+  invalidatePortfolio(userId);
   await setBrokerMeta(userId, "BINANCE", {
     apiKeyMasked: maskSecret(creds.apiKey, 4),
     equityAtSave: balance?.equity ?? null,
@@ -91,5 +94,6 @@ export async function DELETE() {
     return NextResponse.json({ error: "Chưa đăng nhập" }, { status: 401 });
   }
   await deleteCreds(session.user.id, "BINANCE");
+  invalidatePortfolio(session.user.id);
   return NextResponse.json({ ok: true });
 }

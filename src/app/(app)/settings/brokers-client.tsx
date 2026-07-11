@@ -228,8 +228,8 @@ export function BitgetBrokerCard() {
               Bitget Futures
             </CardTitle>
             <CardDescription>
-              USDT-M futures. Đọc số dư + vị thế, và đặt lệnh thật tự động
-              từ Nhật ký giao dịch khi bật toggle.
+              USDT-M futures. Đọc số dư + vị thế và tự đồng bộ lệnh
+              khớp/đóng vào Nhật ký giao dịch — chỉ cần quyền đọc.
             </CardDescription>
           </div>
           {status?.connected ? (
@@ -1070,8 +1070,8 @@ export function BinanceBrokerCard() {
               Binance Futures
             </CardTitle>
             <CardDescription>
-              USDT-M futures. Đọc số dư + vị thế, và đặt lệnh thật tự động từ
-              Nhật ký giao dịch (chọn sàn khi đặt).
+              USDT-M futures. Đọc số dư + vị thế và tự đồng bộ lệnh
+              khớp/đóng vào Nhật ký giao dịch — chỉ cần quyền đọc.
             </CardDescription>
           </div>
           {status?.connected ? (

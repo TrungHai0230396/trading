@@ -3,6 +3,7 @@ import { z } from "zod";
 import { auth } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { normalizeSymbol } from "@/lib/insights/curated";
+import { rateLimit } from "@/lib/brokers/rate-limit";
 
 // Crypto-only: the scanner (on-demand + consensus cron) no longer covers
 // forex, so nothing forex should enter the watchlist either.
@@ -69,10 +70,22 @@ export async function GET(req: Request) {
   });
 }
 
+// The consensus cron scans EVERY followed symbol against Binance each 15
+// minutes — an unbounded watchlist is a lever to stall the shared cron tick
+// (and every user's alerts with it). 50 coins is far beyond real use.
+const MAX_WATCHLIST_PER_USER = 50;
+
 export async function POST(req: Request) {
   const session = await auth();
-  if (!session?.user) {
+  if (!session?.user?.id) {
     return NextResponse.json({ error: "Chưa đăng nhập" }, { status: 401 });
+  }
+
+  if (!rateLimit(`watchlist:${session.user.id}`, 20, 60_000)) {
+    return NextResponse.json(
+      { error: "Bạn thao tác quá nhanh. Thử lại sau ít giây." },
+      { status: 429 },
+    );
   }
 
   let body: unknown;
@@ -104,6 +117,16 @@ export async function POST(req: Request) {
     });
     if (existing) {
       return NextResponse.json(serialize(existing), { status: 200 });
+    }
+
+    const count = await db.watchlistSymbol.count({ where: { userId } });
+    if (count >= MAX_WATCHLIST_PER_USER) {
+      return NextResponse.json(
+        {
+          error: `Watchlist tối đa ${MAX_WATCHLIST_PER_USER} coin — bỏ theo dõi bớt trước khi thêm.`,
+        },
+        { status: 400 },
+      );
     }
 
     const created = await db.watchlistSymbol.create({

@@ -9,12 +9,28 @@
 
 const hits = new Map<string, number[]>();
 
+// Keys include unauthenticated input (`login:<email>` accepts any email), so
+// the map must not grow forever. Above this size, sweep entries whose newest
+// hit is older than the longest window we use (1h) — an hour-old key can't
+// influence any current limit.
+const SWEEP_THRESHOLD = 10_000;
+const MAX_WINDOW_MS = 60 * 60_000;
+
+function sweep(now: number): void {
+  if (hits.size < SWEEP_THRESHOLD) return;
+  for (const [k, arr] of hits) {
+    const newest = arr[arr.length - 1] ?? 0;
+    if (now - newest > MAX_WINDOW_MS) hits.delete(k);
+  }
+}
+
 export function rateLimit(
   key: string,
   max: number,
   windowMs: number,
 ): boolean {
   const now = Date.now();
+  sweep(now);
   const arr = (hits.get(key) ?? []).filter((t) => now - t < windowMs);
   if (arr.length >= max) {
     hits.set(key, arr);

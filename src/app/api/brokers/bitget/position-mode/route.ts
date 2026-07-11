@@ -15,6 +15,10 @@ import { auth } from "@/lib/auth";
 import { loadCreds } from "@/lib/brokers/store";
 import { rateLimit } from "@/lib/brokers/rate-limit";
 import {
+  canAutoTrade,
+  AUTOTRADE_FORBIDDEN_MESSAGE,
+} from "@/lib/brokers/entitlements";
+import {
   getPositionMode,
   setPositionMode,
   BitgetError,
@@ -62,6 +66,16 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Chưa đăng nhập" }, { status: 401 });
   }
   const userId = session.user.id;
+
+  // Live exchange write — same entitlement gate as every other write route
+  // (this one was the lone gap: a read-only public user could flip their
+  // account's hedge/one-way mode).
+  if (!(await canAutoTrade(userId))) {
+    return NextResponse.json(
+      { error: AUTOTRADE_FORBIDDEN_MESSAGE },
+      { status: 403 },
+    );
+  }
 
   if (!rateLimit(`broker-posmode:${userId}`, 5, 60_000)) {
     return NextResponse.json(

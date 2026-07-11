@@ -57,7 +57,10 @@ services:
       NODE_ENV: production
       AUTH_TRUST_HOST: "true"
     ports:
-      - "3000:3000"
+      # Loopback only — the reverse proxy (Caddy/nginx) on 443 upstreams to
+      # 127.0.0.1:3000. Publishing 0.0.0.0 would let the internet bypass
+      # TLS/WAF/rate-limiting entirely (Docker's iptables also bypass ufw).
+      - "127.0.0.1:3000:3000"
     logging:
       driver: json-file
       options:

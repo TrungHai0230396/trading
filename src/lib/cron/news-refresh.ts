@@ -43,7 +43,21 @@ export async function runNewsRefreshForAllUsers(): Promise<void> {
       });
       userIds = [...engagedIds, ...rest.map((r) => r.id)];
     } else {
-      userIds = engagedIds.slice(0, cap);
+      // More engaged users than budget: serve the LEAST-recently-refreshed
+      // first so the cap rotates fairly across ticks. A plain slice() of an
+      // unordered findMany picked the same fixed subset every hour — user
+      // #cap+1 silently never got news.
+      const latest = await db.newsArticle.groupBy({
+        by: ["userId"],
+        where: { userId: { in: engagedIds } },
+        _max: { createdAt: true },
+      });
+      const lastSeen = new Map(
+        latest.map((r) => [r.userId, r._max.createdAt?.getTime() ?? 0]),
+      );
+      userIds = [...engagedIds]
+        .sort((a, b) => (lastSeen.get(a) ?? 0) - (lastSeen.get(b) ?? 0))
+        .slice(0, cap);
     }
   } catch (e) {
     console.error("[cron:news] user lookup failed", e);

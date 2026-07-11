@@ -73,6 +73,11 @@ export async function runConsensusScanForAllUsers(): Promise<void> {
         db.watchlistSymbol.findMany({
           where: { userId, market: "CRYPTO" },
           select: { symbol: true },
+          // Defensive bound matching the API-side cap (50/user): one
+          // oversized list must never stall the shared 15-minute tick —
+          // and with it every user's alerts.
+          orderBy: { createdAt: "asc" },
+          take: 50,
         }),
         getTfOverrides(userId),
       ]);

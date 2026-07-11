@@ -31,14 +31,28 @@ export const googleEnabled = Boolean(
 );
 
 /**
+ * The operator's INTENT to run Google-only, read directly from env. Kept
+ * separate from `googleOnly` so a missing/rotated OAuth secret FAILS CLOSED:
+ * password paths stay shut (intent) even when the Google button can't render
+ * (enabled). Otherwise a typo'd secret would silently reopen password signup.
+ */
+export const googleOnlyIntent = process.env.AUTH_GOOGLE_ONLY === "true";
+
+if (googleOnlyIntent && !googleEnabled) {
+  console.error(
+    "[auth] AUTH_GOOGLE_ONLY=true but AUTH_GOOGLE_ID/SECRET missing — " +
+      "nobody can log in until the Google OAuth creds are restored.",
+  );
+}
+
+/**
  * Google-ONLY mode: the email/password forms are hidden and password
  * registration is closed, so Google is the sole way in. Requires Google
  * to actually be configured (else nobody could log in). In this mode the
  * account-takeover guard is unnecessary — no password account can be
  * created — so Google safely auto-links into any pre-existing account.
  */
-export const googleOnly =
-  googleEnabled && process.env.AUTH_GOOGLE_ONLY === "true";
+export const googleOnly = googleEnabled && googleOnlyIntent;
 
 export const { handlers, signIn, signOut, auth } = NextAuth({
   session: { strategy: "jwt" },
@@ -50,6 +64,11 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
         password: { label: "Password", type: "password" },
       },
       authorize: async (credentials) => {
+        // Google-only INTENT closes the credentials endpoint outright —
+        // the login UI hides the form, but POST /api/auth/callback/credentials
+        // stays routable and must not remain a scripted side door.
+        if (googleOnlyIntent) return null;
+
         const parsed = credentialsSchema.safeParse(credentials);
         if (!parsed.success) return null;
 

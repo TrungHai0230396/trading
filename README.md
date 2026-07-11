@@ -53,6 +53,31 @@ docker compose start         # resume
 docker compose down -v       # nuke containers + DB volume (DESTRUCTIVE)
 ```
 
+## Backup & restore
+
+The `db-backup` sidecar writes a nightly `mysqldump` to `./backups/`
+(kept `DB_BACKUP_KEEP_DAYS` days). To RESTORE one:
+
+```bash
+# 1. Stop the app so crons + the live Prisma client aren't writing
+#    mid-restore (or restart it with CRON_DISABLED=true in .env):
+docker compose stop app
+
+# 2. Pipe the dump into the running mysql container (the dump omits
+#    --databases, so the target schema must be named):
+gunzip < backups/tranding-YYYYMMDD-HHMMSS.sql.gz \
+  | docker exec -i tranding-mysql \
+      mysql -u root -p"$MYSQL_ROOT_PASSWORD" tranding
+
+# 3. Start the app — its entrypoint runs `prisma migrate deploy`, which
+#    re-applies any migrations newer than the dump:
+docker compose start app
+```
+
+Rehearse this once against a scratch database BEFORE you need it in
+anger. Keep an offsite copy of `./backups` AND of `ENCRYPTION_KEY` —
+without the key, restored broker credentials are unreadable.
+
 ## Run it (host pnpm dev)
 
 Useful for fast iteration with HMR. The app talks to the dockerized

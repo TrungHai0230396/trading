@@ -10,7 +10,7 @@ import { NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 import { z } from "zod";
 
-import { auth } from "@/lib/auth";
+import { auth, googleOnlyIntent } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { rateLimit } from "@/lib/brokers/rate-limit";
 
@@ -29,6 +29,16 @@ const Body = z.object({
 });
 
 export async function POST(req: Request) {
+  // Google-only mode: passwords must not exist at all. Without this, a
+  // session could SET a password here and keep credentials login as a
+  // persistent side door around the Google-only policy.
+  if (googleOnlyIntent) {
+    return NextResponse.json(
+      { error: "Chỉ hỗ trợ đăng nhập bằng Google." },
+      { status: 403 },
+    );
+  }
+
   const session = await auth();
   if (!session?.user?.id) {
     return NextResponse.json({ error: "Chưa đăng nhập" }, { status: 401 });

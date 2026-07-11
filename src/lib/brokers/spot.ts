@@ -334,6 +334,16 @@ async function fetchBinanceFutures(
 
 // ─── Entry point ────────────────────────────────────────────────────────
 
+/**
+ * Drop a user's cached portfolio — called when they connect/disconnect a
+ * broker key so the dashboard reflects the change immediately instead of
+ * showing "Chưa kết nối sàn nào" (or a ghost broker) for up to 60s.
+ */
+export function invalidatePortfolio(userId: string): void {
+  cache.delete(userId);
+  inflight.delete(userId);
+}
+
 export async function getPortfolio(userId: string): Promise<Portfolio> {
   const hit = cache.get(userId);
   if (hit && Date.now() - hit.at < CACHE_TTL_MS) return hit.data;

@@ -1,7 +1,7 @@
 import { Suspense } from "react";
 import Link from "next/link";
 import { LoginForm } from "./login-form";
-import { googleEnabled, googleOnly } from "@/lib/auth";
+import { googleEnabled, googleOnly, googleOnlyIntent } from "@/lib/auth";
 
 // Evaluated per-request, not baked at build time — the Docker builder has
 // no AUTH_GOOGLE_* env, so a static prerender would freeze the Google
@@ -9,6 +9,23 @@ import { googleEnabled, googleOnly } from "@/lib/auth";
 export const dynamic = "force-dynamic";
 
 export default function LoginPage() {
+  // Google-only intent with broken/missing OAuth creds must fail CLOSED:
+  // a config error page, not a silent fallback to the password form the
+  // operator explicitly turned off.
+  if (googleOnlyIntent && !googleEnabled) {
+    return (
+      <div className="space-y-3">
+        <h1 className="text-2xl font-semibold tracking-tight">
+          Đăng nhập tạm gián đoạn
+        </h1>
+        <p className="text-sm text-muted-foreground">
+          Hệ thống đang cấu hình lại đăng nhập Google. Vui lòng quay lại sau
+          ít phút.
+        </p>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       <div className="space-y-1">

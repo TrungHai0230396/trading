@@ -52,12 +52,11 @@ function clientIp(req: Request): string {
 }
 
 export async function POST(req: Request) {
-  // Google-only mode: no password signups at all (closes the account-
-  // takeover-by-unverified-email vector entirely).
-  const googleOnly =
-    process.env.AUTH_GOOGLE_ONLY === "true" &&
-    Boolean(process.env.AUTH_GOOGLE_ID && process.env.AUTH_GOOGLE_SECRET);
-  if (googleOnly) {
+  // Google-only INTENT closes password signup — deliberately independent
+  // of whether OAuth creds are currently valid, so a missing/rotated secret
+  // fails CLOSED (login outage, loud) instead of silently reopening
+  // password registration.
+  if (process.env.AUTH_GOOGLE_ONLY === "true") {
     return NextResponse.json(
       { error: "Chỉ hỗ trợ đăng nhập bằng Google." },
       { status: 403 },
