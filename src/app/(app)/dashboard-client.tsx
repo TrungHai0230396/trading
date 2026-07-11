@@ -656,15 +656,26 @@ function PortfolioHero({
             </p>
           ) : null}
           <p className="text-[11px] text-muted-foreground/70">
-            Cập nhật {format(parseISO(data.fetchedAt), "HH:mm")} · Spot +
-            Futures (USDT-M) · chỉ xem
+            Cập nhật {format(parseISO(data.fetchedAt), "HH:mm")} · USDT-M ·
+            chỉ xem
           </p>
         </div>
 
-        {/* Right: per-broker sub-panels */}
-        <div className="grid gap-3 sm:grid-cols-2">
+        {/* Right: per-broker sub-panels. With a single broker the panel
+            takes the full row (a lone half-width panel left the hero's
+            right side visibly empty). */}
+        <div
+          className={cn(
+            "grid gap-3",
+            data.brokers.length > 1 && "sm:grid-cols-2",
+          )}
+        >
           {data.brokers.map((b) => (
-            <BrokerPanel key={b.broker} b={b} />
+            <BrokerPanel
+              key={b.broker}
+              b={b}
+              wide={data.brokers.length === 1}
+            />
           ))}
         </div>
       </CardContent>
@@ -672,7 +683,13 @@ function PortfolioHero({
   );
 }
 
-function BrokerPanel({ b }: { b: Portfolio["brokers"][number] }) {
+function BrokerPanel({
+  b,
+  wide = false,
+}: {
+  b: Portfolio["brokers"][number];
+  wide?: boolean;
+}) {
   const name = b.broker === "BITGET" ? "Bitget" : "Binance";
   const errored = Boolean(b.spot.error || b.futures.error);
   const total = b.spot.totalUsd + b.futures.equity;
@@ -695,7 +712,12 @@ function BrokerPanel({ b }: { b: Portfolio["brokers"][number] }) {
         </span>
       </div>
 
-      <div className="mt-1.5 space-y-1">
+      <div
+        className={cn(
+          "mt-1.5",
+          wide ? "grid gap-x-8 gap-y-1 sm:grid-cols-2" : "space-y-1",
+        )}
+      >
         <div className="flex items-baseline justify-between text-xs">
           <span className="text-muted-foreground">Futures</span>
           {b.futures.error ? (
