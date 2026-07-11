@@ -3,10 +3,18 @@
 /**
  * Tổng quan — the live dashboard.
  *
- * Two independent data sources, polled on different clocks:
- *   - /api/dashboard (local DB aggregate)         → 60s
- *   - /api/brokers/bitget/account (exchange call) → 60s, fails silently
- *     when Bitget isn't connected so the rest of the page stays useful.
+ * Layout hierarchy (money first — this is a trading cockpit):
+ *   1. HERO: Tổng tài sản — grand total + per-broker spot/futures columns.
+ *      Four explicit states: skeleton / loaded / stale-error / connect-CTA.
+ *   2. Positions strip — pills, only when something is actually open.
+ *   3. Compact stat strip (journal performance, sample-size guarded).
+ *   4. Equity curve (2/3) + right rail: latest scan, news.
+ *
+ * Data sources on independent clocks:
+ *   - /api/dashboard (local DB aggregate)      → 60s
+ *   - /api/brokers/portfolio (exchange, cached) → 2m — THROWS on !ok so
+ *     react-query keeps last-good data instead of blanking the hero.
+ *   - /api/brokers/bitget/account (positions)   → 60s, null when absent
  */
 
 import * as React from "react";
@@ -15,12 +23,11 @@ import { useQuery } from "@tanstack/react-query";
 import { format, parseISO } from "date-fns";
 import {
   Activity,
-  BookOpenText,
-  Calculator,
   ChevronRight,
   Newspaper,
   Radar,
   TrendingUp,
+  Wallet,
 } from "lucide-react";
 import {
   Area,
@@ -33,18 +40,18 @@ import {
 
 import {
   Card,
+  CardAction,
   CardContent,
-  CardDescription,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/empty-state";
 import { cn } from "@/lib/utils";
 
 // ──────────────────────────────────────────────────────────────────────
-// Types (mirror /api/dashboard + /api/brokers/bitget/account)
+// Types (mirror /api/dashboard + /api/brokers/*)
 // ──────────────────────────────────────────────────────────────────────
 type DashboardData = {
   currency: string;
@@ -79,20 +86,6 @@ type BitgetAccount = {
     unrealizedPnl: number | null;
   }>;
 };
-
-const fmt = (n: number | null | undefined, dp = 2): string =>
-  typeof n === "number" && Number.isFinite(n)
-    ? new Intl.NumberFormat("en-US", {
-        minimumFractionDigits: dp,
-        maximumFractionDigits: dp,
-      }).format(n)
-    : "—";
-
-const QUICK_LINKS = [
-  { href: "/calculator", icon: Calculator, label: "Tính khối lượng", desc: "Tính lot theo risk" },
-  { href: "/journal/new", icon: BookOpenText, label: "Lệnh mới", desc: "Ghi vào nhật ký" },
-  { href: "/scanner", icon: Radar, label: "Quét đa khung", desc: "Tín hiệu + watchlist" },
-];
 
 type NewsItem = {
   id: string;
@@ -131,6 +124,19 @@ type Portfolio = {
   fetchedAt: string;
 };
 
+const fmt = (n: number | null | undefined, dp = 2): string =>
+  typeof n === "number" && Number.isFinite(n)
+    ? new Intl.NumberFormat("en-US", {
+        minimumFractionDigits: dp,
+        maximumFractionDigits: dp,
+      }).format(n)
+    : "—";
+
+// Performance stats from a handful of trades scream (a lone red -1.06R was
+// the loudest number on the page). Below this many closed trades we show
+// "—" instead of pretending the sample means something.
+const MIN_SAMPLE = 5;
+
 export function DashboardClient() {
   const dash = useQuery<DashboardData>({
     queryKey: ["dashboard"],
@@ -143,12 +149,12 @@ export function DashboardClient() {
     refetchIntervalInBackground: false,
   });
 
-  // Compact news feed — the standalone news page was removed; a cron keeps
-  // the table fresh and this card is its visible surface.
+  // Compact news feed — a cron keeps the table fresh; 3 items is enough
+  // for a rail card (5 made the rail longer than the chart).
   const news = useQuery<{ items: NewsItem[] }>({
     queryKey: ["dashboard", "news"],
     queryFn: async ({ signal }) => {
-      const res = await fetch("/api/news/list?limit=5", { signal });
+      const res = await fetch("/api/news/list?limit=3", { signal });
       if (!res.ok) return { items: [] };
       return (await res.json()) as { items: NewsItem[] };
     },
@@ -156,24 +162,30 @@ export function DashboardClient() {
     refetchIntervalInBackground: false,
   });
 
+  // Positions only — all MONEY numbers come from the portfolio hero (two
+  // cards sampling the same wallet on different clocks contradicted each
+  // other). Null (not thrown) when not connected: the account route 4xxes
+  // for never-connected users and endless retries would be waste.
   const bitget = useQuery<BitgetAccount | null>({
     queryKey: ["dashboard", "bitget"],
     queryFn: async ({ signal }) => {
       const res = await fetch("/api/brokers/bitget/account", { signal });
-      if (!res.ok) return null; // not connected / exchange down — no card
+      if (!res.ok) return null;
       return (await res.json()) as BitgetAccount;
     },
     refetchInterval: 60_000,
     refetchIntervalInBackground: false,
   });
 
-  // Read-only unified portfolio (spot + futures, all brokers). Server
-  // caches 60s; no card when no broker is connected (empty brokers array).
-  const portfolio = useQuery<Portfolio | null>({
+  // Unified money hub. The route answers 200 + brokers:[] when nothing is
+  // connected, so !ok is always a REAL error → throw, and react-query keeps
+  // the last good data (previously `return null` blanked the hero — and the
+  // user's entire balance — on any transient 5xx).
+  const portfolio = useQuery<Portfolio>({
     queryKey: ["dashboard", "portfolio"],
     queryFn: async ({ signal }) => {
       const res = await fetch("/api/brokers/portfolio", { signal });
-      if (!res.ok) return null;
+      if (!res.ok) throw new Error("Không tải được số dư");
       return (await res.json()) as Portfolio;
     },
     refetchInterval: 2 * 60_000,
@@ -184,14 +196,13 @@ export function DashboardClient() {
   const ccy = dash.data?.currency ?? "USD";
   const positions = bitget.data?.positions ?? [];
 
-  // "Lệnh đang mở" merges journal OPEN entries with live Bitget positions
-  // so a real position can never display as zero.
+  // "Lệnh đang mở" merges journal OPEN entries with live positions so a
+  // real position can never display as zero.
   const openDisplay =
-    s !== undefined
-      ? Math.max(s.openCount, positions.length)
-      : null;
+    s !== undefined ? Math.max(s.openCount, positions.length) : null;
 
-  const stats = [
+  const enoughSample = (s?.closed30 ?? 0) >= MIN_SAMPLE;
+  const statCells = [
     {
       label: "P/L hôm nay",
       value:
@@ -206,88 +217,165 @@ export function DashboardClient() {
       value: openDisplay === null ? null : String(openDisplay),
       hint:
         positions.length > 0
-          ? `${positions.length} vị thế thật trên Bitget`
-          : "Nhật ký + Bitget",
+          ? `${positions.length} vị thế thật trên sàn`
+          : "Nhật ký + sàn",
       tone: 0,
     },
     {
-      label: "Win rate (30 ngày)",
+      label: "Hiệu suất 30 ngày",
       value:
         s === undefined
           ? null
-          : s.winRate30 === null
+          : !enoughSample
             ? "—"
-            : `${(s.winRate30 * 100).toFixed(1)}%`,
-      hint: s ? `${s.closed30} lệnh đóng trong 30 ngày` : "",
-      tone: 0,
-    },
-    {
-      label: "R-multiple TB",
-      value:
-        s === undefined
-          ? null
-          : s.avgR30 === null
-            ? "—"
-            : `${s.avgR30 > 0 ? "+" : ""}${s.avgR30.toFixed(2)}R`,
-      hint: "30 ngày gần nhất",
-      tone: s?.avgR30 == null ? 0 : Math.sign(s.avgR30),
+            : `WR ${((s.winRate30 ?? 0) * 100).toFixed(0)}% · ${
+                (s.avgR30 ?? 0) > 0 ? "+" : ""
+              }${(s.avgR30 ?? 0).toFixed(2)}R`,
+      hint: !s
+        ? ""
+        : enoughSample
+          ? `${s.closed30} lệnh đóng trong 30 ngày`
+          : `Chưa đủ dữ liệu (${s.closed30} lệnh đóng)`,
+      tone: s === undefined || !enoughSample ? 0 : Math.sign(s.avgR30 ?? 0),
     },
   ];
 
   return (
-    <>
-      {/* ── Stat cards ─────────────────────────────────────────────── */}
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-        {stats.map((st) => (
-          <Card key={st.label} className="border-border/60">
-            <CardHeader className="pb-2">
-              <CardDescription className="text-xs font-medium uppercase tracking-wider">
-                {st.label}
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              {st.value === null ? (
-                <Skeleton className="h-8 w-20" />
-              ) : (
-                <div
-                  className={cn(
-                    "num text-2xl font-semibold",
-                    st.tone > 0 && "text-bullish",
-                    st.tone < 0 && "text-bearish",
-                  )}
-                >
-                  {st.value}
-                </div>
-              )}
-              <div className="mt-1 text-xs text-muted-foreground">{st.hint}</div>
-            </CardContent>
-          </Card>
+    <div className="space-y-4">
+      {/* ── 1. HERO: money first ─────────────────────────────────────── */}
+      {portfolio.isPending ? (
+        <HeroSkeleton />
+      ) : portfolio.data && portfolio.data.brokers.length > 0 ? (
+        <PortfolioHero
+          data={portfolio.data}
+          stale={portfolio.isError}
+          onRetry={() => void portfolio.refetch()}
+        />
+      ) : portfolio.isError ? (
+        <Card>
+          <CardContent className="flex min-h-[120px] flex-col items-center justify-center gap-2 py-6 text-center">
+            <p className="text-sm text-muted-foreground">
+              Không tải được tổng tài sản.
+            </p>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => void portfolio.refetch()}
+            >
+              Thử lại
+            </Button>
+          </CardContent>
+        </Card>
+      ) : (
+        <Card className="border-dashed">
+          <CardContent className="flex flex-col items-center gap-4 py-7 text-center sm:flex-row sm:justify-between sm:text-left">
+            <div className="flex items-center gap-4">
+              <div className="flex size-10 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary max-sm:hidden">
+                <Wallet className="size-5" />
+              </div>
+              <div>
+                <p className="font-medium">Chưa kết nối sàn nào</p>
+                <p className="text-sm text-muted-foreground">
+                  Kết nối Bitget hoặc Binance để xem tổng tài sản — chỉ đọc,
+                  không cần quyền rút tiền.
+                </p>
+              </div>
+            </div>
+            <Button
+              size="sm"
+              className="shrink-0"
+              render={<Link href="/settings" />}
+            >
+              Kết nối sàn
+            </Button>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* ── 2. Open positions — only when real risk is on ────────────── */}
+      {positions.length > 0 ? (
+        <div className="flex flex-wrap gap-2">
+          {positions.map((p) => (
+            <div
+              key={`${p.symbol}-${p.side}`}
+              className="num flex items-center gap-2 rounded-lg border bg-card px-3 py-1.5 text-xs"
+            >
+              <span className="font-medium">{p.symbol}</span>
+              <span
+                className={cn(
+                  "rounded-sm px-1.5 py-0.5 text-[10px] font-medium tracking-wide",
+                  p.side === "long"
+                    ? "bg-bullish/10 text-bullish"
+                    : "bg-bearish/10 text-bearish",
+                )}
+              >
+                {p.side.toUpperCase()} {p.leverage ?? "?"}x
+              </span>
+              <span
+                className={cn(
+                  (p.unrealizedPnl ?? 0) > 0 && "text-bullish",
+                  (p.unrealizedPnl ?? 0) < 0 && "text-bearish",
+                )}
+              >
+                {(p.unrealizedPnl ?? 0) >= 0 ? "+" : ""}
+                {fmt(p.unrealizedPnl)}
+              </span>
+            </div>
+          ))}
+        </div>
+      ) : null}
+
+      {/* ── 3. Journal stat strip (one segmented container) ──────────── */}
+      <div className="grid grid-cols-1 divide-y divide-border/60 overflow-hidden rounded-xl border bg-card sm:grid-cols-3 sm:divide-x sm:divide-y-0">
+        {statCells.map((st) => (
+          <div key={st.label} className="px-4 py-3">
+            <div className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+              {st.label}
+            </div>
+            {st.value === null ? (
+              <Skeleton className="mt-1 h-7 w-24" />
+            ) : (
+              <div
+                className={cn(
+                  "num mt-1 text-xl font-semibold",
+                  st.tone > 0 && "text-bullish",
+                  st.tone < 0 && "text-bearish",
+                )}
+              >
+                {st.value}
+              </div>
+            )}
+            <div className="mt-0.5 text-[11px] text-muted-foreground/70">
+              {st.hint}
+            </div>
+          </div>
         ))}
       </div>
 
-      <div className="mt-6 grid gap-4 lg:grid-cols-3">
-        {/* ── Equity curve ─────────────────────────────────────────── */}
+      {/* ── 4. Chart + rail ──────────────────────────────────────────── */}
+      <div className="grid items-start gap-4 lg:grid-cols-3">
         <Card className="lg:col-span-2">
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-base">
               <Activity className="size-4 text-primary" />
               Đường equity
+              <span className="text-xs font-normal text-muted-foreground">
+                · P/L tích lũy lệnh đã đóng ({ccy})
+              </span>
             </CardTitle>
-            <CardDescription>
-              P/L tích lũy của các lệnh đã đóng ({ccy}).
-            </CardDescription>
           </CardHeader>
           <CardContent>
             {dash.isLoading ? (
-              <Skeleton className="h-64 w-full" />
+              <Skeleton className="h-56 w-full" />
             ) : (dash.data?.equitySeries.length ?? 0) < 2 ? (
               <EmptyState
+                className="h-56 min-h-0 py-6"
                 icon={TrendingUp}
                 title="Chưa đủ lịch sử giao dịch"
                 description="Cần ít nhất 2 lệnh đã đóng để vẽ đường equity."
               />
             ) : (
-              <div className="h-64">
+              <div className="h-56">
                 <ResponsiveContainer width="100%" height="100%">
                   <AreaChart
                     data={dash.data!.equitySeries}
@@ -351,73 +439,33 @@ export function DashboardClient() {
           </CardContent>
         </Card>
 
-        {/* ── Right column ─────────────────────────────────────────── */}
+        {/* ── Right rail ─────────────────────────────────────────────── */}
         <div className="space-y-4">
-          {/* Unified money hub: spot + futures across all connected
-              brokers, one grand total. Read-only. */}
-          {portfolio.data && portfolio.data.brokers.length > 0 ? (
-            <PortfolioCard data={portfolio.data} />
-          ) : null}
-
-          {/* Live Bitget positions. Balance/PnL rows removed — the money
-              numbers live in PortfolioCard above; two cards sampling the
-              same wallet on different clocks showed contradictory values. */}
-          {bitget.data ? (
-            <Card>
+          {/* Latest scanner picks — always render once dash settles, with
+              a run-your-first-scan CTA for fresh accounts */}
+          {dash.isLoading ? (
+            <Card size="sm">
               <CardHeader>
-                <CardTitle className="text-base">Vị thế Bitget</CardTitle>
-                <CardDescription>
-                  Vị thế futures đang mở, trực tiếp từ sàn.
-                </CardDescription>
+                <CardTitle>Quét gần nhất</CardTitle>
               </CardHeader>
-              <CardContent className="space-y-2 text-sm">
-                {positions.length > 0 ? (
-                  <div className="space-y-1">
-                    {positions.map((p) => (
-                      <div
-                        key={`${p.symbol}-${p.side}`}
-                        className="flex items-center justify-between text-xs"
-                      >
-                        <span className="font-mono">
-                          {p.symbol}{" "}
-                          <Badge
-                            variant={p.side === "long" ? "default" : "destructive"}
-                            className="ml-1 text-[10px]"
-                          >
-                            {p.side.toUpperCase()} {p.leverage ?? "?"}x
-                          </Badge>
-                        </span>
-                        <span
-                          className={cn(
-                            "font-mono",
-                            (p.unrealizedPnl ?? 0) > 0 && "text-bullish",
-                            (p.unrealizedPnl ?? 0) < 0 && "text-bearish",
-                          )}
-                        >
-                          {(p.unrealizedPnl ?? 0) >= 0 ? "+" : ""}
-                          {fmt(p.unrealizedPnl)}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <p className="text-xs text-muted-foreground">
-                    Không có vị thế đang mở.
-                  </p>
-                )}
+              <CardContent className="space-y-2">
+                {[0, 1, 2].map((i) => (
+                  <Skeleton key={i} className="h-8 w-full" />
+                ))}
               </CardContent>
             </Card>
-          ) : null}
-
-          {/* Latest scanner picks */}
-          {dash.data?.latestRun && dash.data.latestRun.top.length > 0 ? (
-            <Card>
+          ) : dash.data?.latestRun && dash.data.latestRun.top.length > 0 ? (
+            <Card size="sm">
               <CardHeader>
-                <CardTitle className="text-base">Quét gần nhất</CardTitle>
-                <CardDescription>
-                  Top đồng thuận ·{" "}
-                  {format(parseISO(dash.data.latestRun.createdAt), "dd/MM HH:mm")}
-                </CardDescription>
+                <CardTitle>Quét gần nhất</CardTitle>
+                <CardAction>
+                  <span className="num text-[11px] text-muted-foreground">
+                    {format(
+                      parseISO(dash.data.latestRun.createdAt),
+                      "dd/MM HH:mm",
+                    )}
+                  </span>
+                </CardAction>
               </CardHeader>
               <CardContent className="space-y-1">
                 {dash.data.latestRun.top.map((r) => (
@@ -428,35 +476,53 @@ export function DashboardClient() {
                   >
                     <span className="font-mono">{r.symbol}</span>
                     <span className="flex items-center gap-1.5">
-                      <Badge
-                        variant="outline"
+                      <span
                         className={cn(
-                          "border-transparent text-[10px]",
+                          "rounded-sm px-1.5 py-0.5 text-[10px] font-medium tracking-wide",
                           r.signal === "BULLISH"
                             ? "bg-bullish/10 text-bullish"
                             : "bg-bearish/10 text-bearish",
                         )}
                       >
                         {r.signal}
-                      </Badge>
+                      </span>
                       <ChevronRight className="size-3.5 text-muted-foreground transition group-hover:translate-x-0.5" />
                     </span>
                   </Link>
                 ))}
               </CardContent>
             </Card>
-          ) : null}
-
-          {/* News feed (compact) */}
-          {(news.data?.items.length ?? 0) > 0 ? (
-            <Card>
+          ) : (
+            <Card size="sm">
               <CardHeader>
-                <CardTitle className="flex items-center gap-2 text-base">
+                <CardTitle>Quét gần nhất</CardTitle>
+              </CardHeader>
+              <CardContent className="flex flex-col items-start gap-2">
+                <p className="text-xs text-muted-foreground">
+                  Chưa có lần quét nào.
+                </p>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  render={<Link href="/scanner" />}
+                >
+                  <Radar className="size-4" />
+                  Chạy quét đầu tiên
+                </Button>
+              </CardContent>
+            </Card>
+          )}
+
+          {/* News (compact) */}
+          {(news.data?.items.length ?? 0) > 0 ? (
+            <Card size="sm">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
                   <Newspaper className="size-4 text-primary" />
                   Tin nóng
                 </CardTitle>
               </CardHeader>
-              <CardContent className="space-y-2">
+              <CardContent className="space-y-1.5">
                 {news.data!.items.map((n) => (
                   <a
                     key={n.id}
@@ -466,11 +532,16 @@ export function DashboardClient() {
                     className="block rounded-md border border-transparent px-2 py-1.5 transition hover:border-border hover:bg-accent/40"
                   >
                     <div className="line-clamp-2 text-xs font-medium leading-snug">
-                      {n.sentiment === "bullish"
-                        ? "🟢 "
-                        : n.sentiment === "bearish"
-                          ? "🔴 "
-                          : ""}
+                      {n.sentiment === "bullish" || n.sentiment === "bearish" ? (
+                        <span
+                          className={cn(
+                            "mr-1.5 inline-block size-1.5 rounded-full align-middle",
+                            n.sentiment === "bullish"
+                              ? "bg-bullish"
+                              : "bg-bearish",
+                          )}
+                        />
+                      ) : null}
                       {n.title}
                     </div>
                     <div className="mt-0.5 text-[10px] text-muted-foreground">
@@ -482,187 +553,205 @@ export function DashboardClient() {
               </CardContent>
             </Card>
           ) : null}
-
-          {/* Quick links */}
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base">Truy cập nhanh</CardTitle>
-            </CardHeader>
-            <CardContent className="grid gap-2">
-              {QUICK_LINKS.map(({ href, icon: Icon, label, desc }) => (
-                <Link
-                  key={href}
-                  href={href}
-                  className="group flex items-center gap-3 rounded-md border border-transparent px-3 py-2 transition hover:border-border hover:bg-accent/40"
-                >
-                  <div className="flex size-8 items-center justify-center rounded-md bg-primary/10 text-primary">
-                    <Icon className="size-4" />
-                  </div>
-                  <div className="flex-1">
-                    <div className="text-sm font-medium">{label}</div>
-                    <div className="text-xs text-muted-foreground">{desc}</div>
-                  </div>
-                </Link>
-              ))}
-            </CardContent>
-          </Card>
         </div>
       </div>
-    </>
+    </div>
+  );
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// Hero
+// ──────────────────────────────────────────────────────────────────────
+
+function HeroSkeleton() {
+  return (
+    <Card>
+      <CardContent className="grid min-h-[176px] gap-6 py-5 lg:grid-cols-[minmax(200px,260px)_1fr]">
+        <div className="space-y-3">
+          <Skeleton className="h-4 w-24" />
+          <Skeleton className="h-9 w-44" />
+          <Skeleton className="h-5 w-36" />
+        </div>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Skeleton className="h-full min-h-24 w-full rounded-lg" />
+          <Skeleton className="h-full min-h-24 w-full rounded-lg" />
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function Chip({
+  tone = "neutral",
+  children,
+}: {
+  tone?: "neutral" | "up" | "down";
+  children: React.ReactNode;
+}) {
+  return (
+    <span
+      className={cn(
+        "num inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium",
+        tone === "neutral" && "bg-muted text-muted-foreground",
+        tone === "up" && "bg-bullish/10 text-bullish",
+        tone === "down" && "bg-bearish/10 text-bearish",
+      )}
+    >
+      {children}
+    </span>
   );
 }
 
 /**
- * Money hub — spot + futures across every connected broker, one total.
- * Everything read-only; per-section errors render inline so one broken
- * key never blanks the whole card.
+ * Money hub hero — grand total left, one quiet sub-panel per broker right.
+ * Everything read-only; per-section errors render inline so one broken key
+ * never blanks the card, and errored numbers are never presented as real
+ * zeros ("Tổng cộng 0.00" reads as funds gone).
  */
-function PortfolioCard({ data }: { data: Portfolio }) {
+function PortfolioHero({
+  data,
+  stale,
+  onRetry,
+}: {
+  data: Portfolio;
+  stale: boolean;
+  onRetry: () => void;
+}) {
   const pnl = data.totals.unrealizedPnl;
-  // A dead/revoked key zeroes its sections (error string set) — the zeros
-  // must NOT read as "tiền đã mất". Flag the totals and blank the broker
-  // header instead of presenting 0.00 as authoritative.
   const hasError = data.brokers.some((b) => b.spot.error || b.futures.error);
+
   return (
     <Card>
-      <CardHeader>
-        <CardTitle className="text-base">Tổng tài sản</CardTitle>
-        <CardDescription>
-          Spot + Futures (USDT-M) mọi sàn đã kết nối (chỉ xem).
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-3 text-sm">
-        <div className="rounded-md border bg-card/40 p-3">
-          <div className="flex items-baseline justify-between">
-            <span className="text-xs text-muted-foreground">
-              Tổng cộng
-              {hasError ? (
-                <span className="text-amber-600 dark:text-amber-400">
-                  {" "}
-                  (thiếu dữ liệu — xem lỗi bên dưới)
-                </span>
-              ) : null}
-            </span>
-            <span className="font-mono text-lg font-semibold">
-              ≈ {fmt(data.totals.totalUsd)} USDT
+      <CardContent className="grid gap-6 py-5 lg:grid-cols-[minmax(200px,260px)_1fr]">
+        {/* Left: the number */}
+        <div className="space-y-2">
+          <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+            Tổng tài sản
+            {hasError ? (
+              <span className="ml-1 normal-case tracking-normal text-amber-600 dark:text-amber-400">
+                (thiếu dữ liệu)
+              </span>
+            ) : null}
+          </p>
+          <div className="num truncate text-3xl font-semibold tracking-tight">
+            {fmt(data.totals.totalUsd)}{" "}
+            <span className="text-base font-normal text-muted-foreground">
+              USDT
             </span>
           </div>
-          <div className="mt-1 flex items-center justify-between text-[11px] text-muted-foreground">
-            <span>
-              Futures {fmt(data.totals.futuresUsd)} · Spot{" "}
-              {fmt(data.totals.spotUsd)}
-            </span>
-            <span
-              className={cn(
-                "font-mono",
-                pnl > 0 && "text-bullish",
-                pnl < 0 && "text-bearish",
-              )}
-            >
+          <div className="flex flex-wrap gap-1.5">
+            <Chip>Futures {fmt(data.totals.futuresUsd)}</Chip>
+            <Chip>Spot {fmt(data.totals.spotUsd)}</Chip>
+            <Chip tone={pnl > 0 ? "up" : pnl < 0 ? "down" : "neutral"}>
               PnL {pnl >= 0 ? "+" : ""}
               {fmt(pnl)}
-            </span>
+            </Chip>
           </div>
+          {stale ? (
+            <p className="text-[11px] text-amber-600 dark:text-amber-400">
+              Dữ liệu cũ ·{" "}
+              <button type="button" onClick={onRetry} className="underline">
+                thử lại
+              </button>
+            </p>
+          ) : null}
+          <p className="text-[11px] text-muted-foreground/70">
+            Cập nhật {format(parseISO(data.fetchedAt), "HH:mm")} · Spot +
+            Futures (USDT-M) · chỉ xem
+          </p>
         </div>
 
-        {data.brokers.map((b) => {
-          const name = b.broker === "BITGET" ? "Bitget" : "Binance";
-          const brokerErrored = Boolean(b.spot.error || b.futures.error);
-          const brokerTotal = b.spot.totalUsd + b.futures.equity;
-          return (
-            <div key={b.broker} className="space-y-1 border-t pt-2.5">
-              <div className="flex items-center justify-between">
-                <span className="font-medium">{name}</span>
-                <span className="font-mono text-xs">
-                  {brokerErrored ? "—" : <>≈ {fmt(brokerTotal)} USDT</>}
-                </span>
-              </div>
-
-              <div className="flex items-center justify-between text-xs">
-                <span className="text-muted-foreground">
-                  Futures (USDT-M)
-                </span>
-                {b.futures.error ? (
-                  <span className="text-muted-foreground">—</span>
-                ) : (
-                  <span className="font-mono">
-                    {fmt(b.futures.equity)}
-                    {b.futures.unrealizedPnl !== 0 ? (
-                      <span
-                        className={cn(
-                          "ml-1.5",
-                          b.futures.unrealizedPnl > 0 && "text-bullish",
-                          b.futures.unrealizedPnl < 0 && "text-bearish",
-                        )}
-                      >
-                        ({b.futures.unrealizedPnl > 0 ? "+" : ""}
-                        {fmt(b.futures.unrealizedPnl)})
-                      </span>
-                    ) : null}
-                  </span>
-                )}
-              </div>
-              {b.futures.error ? (
-                <p className="text-[11px] text-muted-foreground">
-                  {b.futures.error}
-                </p>
-              ) : null}
-
-              <div className="flex items-center justify-between text-xs">
-                <span className="text-muted-foreground">Spot</span>
-                {b.spot.error ? (
-                  <span className="text-muted-foreground">—</span>
-                ) : (
-                  <span className="font-mono">{fmt(b.spot.totalUsd)}</span>
-                )}
-              </div>
-              {b.spot.error ? (
-                <p className="text-[11px] text-muted-foreground">
-                  {b.spot.error}
-                </p>
-              ) : b.spot.assets.length === 0 ? (
-                <p className="pl-3 text-[11px] text-muted-foreground">
-                  {b.spot.dustCount + b.spot.unpricedCount > 0
-                    ? `Không có coin ≥ $1 (${b.spot.dustCount} bụi, ${b.spot.unpricedCount} không định giá được).`
-                    : "Ví spot trống."}
-                </p>
-              ) : (
-                <div className="space-y-0.5 pl-3">
-                  {b.spot.assets.map((a) => (
-                    <div
-                      key={a.coin}
-                      className="flex items-center justify-between text-[11px]"
-                    >
-                      <span className="font-mono">{a.coin}</span>
-                      <span className="font-mono text-muted-foreground">
-                        {a.total.toLocaleString("en-US", {
-                          maximumFractionDigits: 6,
-                        })}{" "}
-                        · ≈ {fmt(a.usdValue)}
-                      </span>
-                    </div>
-                  ))}
-                  {b.spot.otherCount > 0 ? (
-                    <p className="text-[11px] text-muted-foreground">
-                      + {b.spot.otherCount} coin khác ≈ {fmt(b.spot.otherUsd)}
-                    </p>
-                  ) : null}
-                  {b.spot.dustCount > 0 ? (
-                    <p className="text-[11px] text-muted-foreground">
-                      + {b.spot.dustCount} coin bụi &lt; $1 (đã ẩn)
-                    </p>
-                  ) : null}
-                  {b.spot.unpricedCount > 0 ? (
-                    <p className="text-[11px] text-muted-foreground">
-                      + {b.spot.unpricedCount} coin không định giá được
-                    </p>
-                  ) : null}
-                </div>
-              )}
-            </div>
-          );
-        })}
+        {/* Right: per-broker sub-panels */}
+        <div className="grid gap-3 sm:grid-cols-2">
+          {data.brokers.map((b) => (
+            <BrokerPanel key={b.broker} b={b} />
+          ))}
+        </div>
       </CardContent>
     </Card>
+  );
+}
+
+function BrokerPanel({ b }: { b: Portfolio["brokers"][number] }) {
+  const name = b.broker === "BITGET" ? "Bitget" : "Binance";
+  const errored = Boolean(b.spot.error || b.futures.error);
+  const total = b.spot.totalUsd + b.futures.equity;
+  const upnl = b.futures.unrealizedPnl;
+
+  // Everything not in the top-3 inline list collapses into one token.
+  const shownAssets = b.spot.assets.slice(0, 3);
+  const hiddenCount =
+    Math.max(0, b.spot.assets.length - 3) +
+    b.spot.otherCount +
+    b.spot.dustCount +
+    b.spot.unpricedCount;
+
+  return (
+    <div className="rounded-lg border border-border/60 bg-muted/30 p-3">
+      <div className="flex items-baseline justify-between gap-2">
+        <span className="text-sm font-medium">{name}</span>
+        <span className="num text-sm">
+          {errored ? "—" : <>≈ {fmt(total)}</>}
+        </span>
+      </div>
+
+      <div className="mt-1.5 space-y-1">
+        <div className="flex items-baseline justify-between text-xs">
+          <span className="text-muted-foreground">Futures</span>
+          {b.futures.error ? (
+            <span className="text-muted-foreground">—</span>
+          ) : (
+            <span className="num">
+              {fmt(b.futures.equity)}
+              {upnl !== 0 ? (
+                <span
+                  className={cn(
+                    "ml-1",
+                    upnl > 0 ? "text-bullish" : "text-bearish",
+                  )}
+                >
+                  ({upnl > 0 ? "+" : ""}
+                  {fmt(upnl)})
+                </span>
+              ) : null}
+            </span>
+          )}
+        </div>
+        <div className="flex items-baseline justify-between text-xs">
+          <span className="text-muted-foreground">Spot</span>
+          {b.spot.error ? (
+            <span className="text-muted-foreground">—</span>
+          ) : (
+            <span className="num">{fmt(b.spot.totalUsd)}</span>
+          )}
+        </div>
+      </div>
+
+      {b.futures.error ? (
+        <p className="mt-1.5 text-[11px] leading-snug text-muted-foreground">
+          {b.futures.error}
+        </p>
+      ) : null}
+      {b.spot.error ? (
+        <p className="mt-1.5 text-[11px] leading-snug text-muted-foreground">
+          {b.spot.error}
+        </p>
+      ) : shownAssets.length > 0 ? (
+        <p
+          className="num mt-1.5 truncate border-t border-border/50 pt-1.5 text-[11px] text-muted-foreground"
+          title={b.spot.assets
+            .map((a) => `${a.coin} ≈ ${fmt(a.usdValue)}`)
+            .join(" · ")}
+        >
+          {shownAssets.map((a) => `${a.coin} ${fmt(a.usdValue)}`).join(" · ")}
+          {hiddenCount > 0 ? (
+            <span className="text-muted-foreground/60">
+              {" "}
+              +{hiddenCount} coin nhỏ
+            </span>
+          ) : null}
+        </p>
+      ) : null}
+    </div>
   );
 }
