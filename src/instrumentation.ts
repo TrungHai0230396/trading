@@ -16,6 +16,7 @@
 const SYNC_INTERVAL_MS = 2 * 60_000;
 const CONSENSUS_INTERVAL_MS = 15 * 60_000;
 const NEWS_INTERVAL_MS = 60 * 60_000;
+const BROADCAST_INTERVAL_MS = 6 * 60 * 60_000; // channel top-consensus, 4×/day
 
 // Guard against double-registration (dev HMR re-runs register()).
 declare global {
@@ -80,6 +81,16 @@ export async function register() {
   // Prime once shortly after boot so a fresh deploy isn't news-empty for
   // a full hour.
   setTimeout(newsTick, 90_000);
+
+  // Telegram: one system bot. The long-poll loop receives /start link codes
+  // (kiểu A); the daily broadcast posts top consensus to the channel (kiểu B).
+  const { startTelegramPolling } = await import("@/lib/notify/telegram-poll");
+  startTelegramPolling();
+
+  const { runConsensusBroadcast } = await import("@/lib/cron/broadcast");
+  const broadcastTick = guarded("broadcast", runConsensusBroadcast);
+  setInterval(broadcastTick, BROADCAST_INTERVAL_MS);
+  setTimeout(broadcastTick, 120_000);
 
   console.log(
     `[cron] started: broker-sync every ${SYNC_INTERVAL_MS / 60000}m, consensus-scan every ${CONSENSUS_INTERVAL_MS / 60000}m, news-refresh every ${NEWS_INTERVAL_MS / 60000}m`,

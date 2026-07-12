@@ -100,11 +100,7 @@ export async function getAdminStats(): Promise<AdminStats> {
       select: { userId: true },
       distinct: ["userId"],
     }),
-    db.apiKey.findMany({
-      where: { kind: "TELEGRAM" },
-      select: { userId: true },
-      distinct: ["userId"],
-    }),
+    db.user.count({ where: { telegramChatId: { not: null } } }),
     db.appSetting.findMany({
       where: { key: "feature:autotrade" },
       select: { value: true },
@@ -156,7 +152,7 @@ export async function getAdminStats(): Promise<AdminStats> {
       new7d,
       new30d,
       withBroker: brokerUsers.length,
-      withTelegram: telegramUsers.length,
+      withTelegram: telegramUsers,
       autotradeGranted,
     },
     activity: {

@@ -51,14 +51,15 @@ async function setState(userId: string, state: ConsensusState): Promise<void> {
 }
 
 export async function runConsensusScanForAllUsers(): Promise<void> {
-  // Users who can actually receive the alert.
+  // Users who can actually receive the alert — those who linked the system
+  // Telegram bot (telegramChatId set).
   let userIds: string[] = [];
   try {
-    const rows = await db.apiKey.findMany({
-      where: { kind: "TELEGRAM", isActive: true, label: null },
-      select: { userId: true },
+    const rows = await db.user.findMany({
+      where: { telegramChatId: { not: null } },
+      select: { id: true },
     });
-    userIds = [...new Set(rows.map((r) => r.userId))];
+    userIds = rows.map((r) => r.id);
   } catch (e) {
     console.error("[cron:consensus] user lookup failed", e);
     return;

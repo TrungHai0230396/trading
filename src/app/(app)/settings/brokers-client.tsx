@@ -1414,65 +1414,77 @@ export function RiskLimitsCard() {
 }
 
 // ────────────────────────────────────────────────────────────────────
-// Telegram notifications card
+// Telegram notifications card — ONE system bot, link via deep-link
 // ────────────────────────────────────────────────────────────────────
 
-type TelegramStatus = {
-  connected: boolean;
-  meta: {
-    botName?: string;
-    chatId?: string;
-    tokenMasked?: string;
-    savedAt?: string;
-  } | null;
-};
+type TgStatus = { enabled: boolean; connected: boolean };
 
 export function TelegramNotifyCard() {
-  const [status, setStatus] = React.useState<TelegramStatus | null>(null);
-  const [botToken, setBotToken] = React.useState("");
-  const [chatId, setChatId] = React.useState("");
-  const [showToken, setShowToken] = React.useState(false);
-  const [submitting, setSubmitting] = React.useState(false);
-  const [editing, setEditing] = React.useState(false);
+  const [status, setStatus] = React.useState<TgStatus | null>(null);
+  const [connecting, setConnecting] = React.useState(false);
+  const pollTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  React.useEffect(() => {
-    fetch("/api/notify/telegram")
-      .then((r) => r.json())
-      .then((d: TelegramStatus) => setStatus(d))
-      .catch(() => setStatus({ connected: false, meta: null }));
+  const refresh = React.useCallback(async () => {
+    try {
+      const s = (await fetch("/api/notify/telegram").then((r) =>
+        r.json(),
+      )) as TgStatus;
+      setStatus(s);
+      return s;
+    } catch {
+      setStatus({ enabled: false, connected: false });
+      return null;
+    }
   }, []);
 
-  const save = async () => {
-    if (!botToken || !chatId) {
-      toast.error("Cần nhập Bot token và Chat ID.");
-      return;
-    }
-    setSubmitting(true);
+  React.useEffect(() => {
+    void refresh();
+    return () => {
+      if (pollTimer.current) clearTimeout(pollTimer.current);
+    };
+  }, [refresh]);
+
+  const connect = async () => {
+    setConnecting(true);
     try {
-      const res = await fetch("/api/notify/telegram", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ botToken: botToken.trim(), chatId: chatId.trim() }),
-      });
-      const d = (await res.json()) as { ok?: boolean; botName?: string; error?: string };
-      if (!res.ok || !d.ok) {
-        toast.error(d.error ?? `Lỗi ${res.status}`);
+      const res = await fetch("/api/notify/telegram", { method: "POST" });
+      const d = (await res.json().catch(() => null)) as {
+        url?: string;
+        error?: string;
+      } | null;
+      if (!res.ok || !d?.url) {
+        toast.error(d?.error ?? `Lỗi ${res.status}`);
+        setConnecting(false);
         return;
       }
-      toast.success(`Đã kết nối Telegram — @${d.botName}. Kiểm tra tin nhắn thử trong app.`);
-      setBotToken("");
-      setChatId("");
-      setEditing(false);
-      const next = await fetch("/api/notify/telegram").then((r) => r.json());
-      setStatus(next as TelegramStatus);
-    } finally {
-      setSubmitting(false);
+      // Open Telegram; the user presses Start there, the bot's long-poll
+      // loop binds their chat, then our status flips to connected.
+      window.open(d.url, "_blank", "noopener");
+      toast.info("Bấm Start trong Telegram để hoàn tất kết nối…");
+
+      const startedAt = Date.now();
+      const poll = async () => {
+        const s = await refresh();
+        if (s?.connected) {
+          setConnecting(false);
+          toast.success("Đã kết nối Telegram! 🎉");
+          return;
+        }
+        if (Date.now() - startedAt > 3 * 60_000) {
+          setConnecting(false);
+          return; // give up quietly after 3 min
+        }
+        pollTimer.current = setTimeout(poll, 2500);
+      };
+      pollTimer.current = setTimeout(poll, 2500);
+    } catch {
+      toast.error("Không tạo được liên kết. Thử lại.");
+      setConnecting(false);
     }
   };
 
   const disconnect = async () => {
     if (!confirm("Ngắt thông báo Telegram?")) return;
-    setSubmitting(true);
     try {
       const res = await fetch("/api/notify/telegram", { method: "DELETE" });
       if (!res.ok) {
@@ -1480,9 +1492,9 @@ export function TelegramNotifyCard() {
         return;
       }
       toast.success("Đã ngắt Telegram.");
-      setStatus({ connected: false, meta: null });
-    } finally {
-      setSubmitting(false);
+      setStatus({ enabled: true, connected: false });
+    } catch {
+      toast.error("Không ngắt được.");
     }
   };
 
@@ -1513,113 +1525,39 @@ export function TelegramNotifyCard() {
         </div>
       </CardHeader>
       <CardContent className="space-y-4">
-        {status?.connected && !editing ? (
-          <div className="space-y-3">
-            <div className="space-y-1.5 rounded-md border bg-card/40 p-3 text-sm">
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Bot</span>
-                <span className="font-mono">@{status.meta?.botName ?? "—"}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Chat ID</span>
-                <span className="font-mono text-xs">{status.meta?.chatId ?? "—"}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Token</span>
-                <span className="font-mono text-xs">{status.meta?.tokenMasked ?? "—"}</span>
-              </div>
-            </div>
-            <div className="flex gap-2">
-              <Button variant="outline" size="sm" onClick={() => setEditing(true)}>
-                Đổi bot
-              </Button>
-              <Button
-                variant="destructive"
-                size="sm"
-                onClick={disconnect}
-                disabled={submitting}
-              >
-                <Trash2 className="size-4" />
-                Ngắt kết nối
-              </Button>
-            </div>
+        {status === null ? (
+          <p className="text-xs text-muted-foreground">Đang tải…</p>
+        ) : !status.enabled ? (
+          <p className="rounded-md border border-dashed p-3 text-xs text-muted-foreground">
+            Kênh Telegram chưa được bật trên hệ thống. Vui lòng thử lại sau.
+          </p>
+        ) : status.connected ? (
+          <div className="flex flex-wrap items-center gap-2">
+            <p className="flex-1 text-sm text-muted-foreground">
+              Bạn đang nhận thông báo qua bot Vela. Muốn dừng thì gõ{" "}
+              <code className="rounded bg-muted px-1">/stop</code> trong
+              Telegram, hoặc:
+            </p>
+            <Button variant="destructive" size="sm" onClick={disconnect}>
+              <Trash2 className="size-4" />
+              Ngắt kết nối
+            </Button>
           </div>
         ) : (
-          <>
-            <details className="rounded-md border bg-card/40 px-3 py-2 text-xs">
-              <summary className="cursor-pointer font-medium">
-                Cách tạo bot + lấy Chat ID (2 phút)
-              </summary>
-              <ol className="ml-4 mt-2 list-decimal space-y-1 text-muted-foreground">
-                <li>
-                  Mở Telegram, chat với <strong>@BotFather</strong> → gõ{" "}
-                  <code className="rounded bg-muted px-1">/newbot</code> → đặt tên
-                  → nhận <strong>Bot token</strong> (dạng{" "}
-                  <code className="rounded bg-muted px-1">123456:ABC-DEF…</code>).
-                </li>
-                <li>
-                  Bấm <strong>Start</strong> cho bot vừa tạo (bắt buộc — bot không
-                  thể nhắn trước cho bạn).
-                </li>
-                <li>
-                  Chat với <strong>@userinfobot</strong> → nó trả về{" "}
-                  <strong>Chat ID</strong> của bạn (dạng số).
-                </li>
-                <li>Dán 2 giá trị vào dưới → Kết nối. App sẽ gửi tin thử ngay.</li>
-              </ol>
-            </details>
-            <div className="space-y-3">
-              <FormField label="Bot token" hint="Từ @BotFather">
-                <div className="relative">
-                  <Input
-                    autoComplete="off"
-                    type={showToken ? "text" : "password"}
-                    value={botToken}
-                    onChange={(e) => setBotToken(e.target.value)}
-                    placeholder="123456789:AAF..."
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowToken((v) => !v)}
-                    className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-                    aria-label={showToken ? "Ẩn token" : "Hiện token"}
-                  >
-                    {showToken ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
-                  </button>
-                </div>
-              </FormField>
-              <FormField label="Chat ID" hint="Từ @userinfobot — dạng số">
-                <Input
-                  autoComplete="off"
-                  value={chatId}
-                  onChange={(e) => setChatId(e.target.value)}
-                  placeholder="123456789"
-                />
-              </FormField>
-            </div>
-            <div className="flex gap-2">
-              <Button onClick={save} disabled={submitting}>
-                {submitting ? (
-                  <Loader2 className="size-4 animate-spin" />
-                ) : (
-                  <Plug className="size-4" />
-                )}
-                Kết nối & gửi tin thử
-              </Button>
-              {editing ? (
-                <Button
-                  variant="ghost"
-                  onClick={() => {
-                    setEditing(false);
-                    setBotToken("");
-                    setChatId("");
-                  }}
-                >
-                  Huỷ
-                </Button>
-              ) : null}
-            </div>
-          </>
+          <div className="space-y-3">
+            <p className="text-sm text-muted-foreground">
+              Bấm nút bên dưới → Telegram mở ra → bấm{" "}
+              <strong>Start</strong> là xong. Không cần tạo bot hay nhập gì cả.
+            </p>
+            <Button onClick={connect} disabled={connecting}>
+              {connecting ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                <Plug className="size-4" />
+              )}
+              {connecting ? "Đang chờ bạn bấm Start…" : "Kết nối Telegram"}
+            </Button>
+          </div>
         )}
       </CardContent>
     </Card>

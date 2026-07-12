@@ -20,6 +20,11 @@ model User {
   name         String?
   // Nullable: accounts created via Google OAuth have no local password.
   passwordHash String?
+  // Telegram DM target — set when the user links the ONE system bot via the
+  // /start <code> deep-link flow. Alerts send through the shared bot to this
+  // chat. Null = not connected.
+  telegramChatId   String?
+  telegramLinkedAt DateTime?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
@@ -34,6 +39,8 @@ model User {
   strategies     Strategy[]
   tags           Tag[]
   tradingSystems TradingSystem[]
+
+  @@index([telegramChatId])
 }
 
 // ──────────────────────────────────────────────────────────────────────

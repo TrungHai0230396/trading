@@ -1,91 +1,73 @@
 /**
- * Telegram notification channel.
+ * Telegram — ONE system bot for everyone.
  *
- * Credentials: { botToken, chatId } stored encrypted in ApiKey (kind
- * TELEGRAM) via the same store the brokers use. The bot token is a secret;
- * the chat id is not, but bundling both in one blob keeps the load path
- * single-read.
+ * The bot token lives server-side in TELEGRAM_BOT_TOKEN (never exposed).
+ * Users link by pressing Start on the bot via a deep link (see
+ * telegram-link.ts + telegram-poll.ts), which stores their chat id on the
+ * User row. Alerts then DM that chat through the shared bot.
  *
- * Send path is fire-and-forget with a short timeout — a Telegram outage
- * must NEVER block or fail a sync/order flow. Callers get a boolean and
- * may log, but should not throw on false.
+ * TELEGRAM_CHANNEL_ID (optional) is a public channel/group the bot posts
+ * broadcast signals to (everyone who joins the channel sees them).
+ *
+ * All sends are fire-and-forget with a short timeout — a Telegram outage
+ * must NEVER block or fail a sync/scan flow.
  */
 
 import "server-only";
-import { loadCreds } from "@/lib/brokers/store";
-
-export type TelegramCreds = {
-  botToken: string;
-  chatId: string;
-};
+import { db } from "@/lib/db";
 
 const API = "https://api.telegram.org";
 
-/**
- * Verify the token by calling getMe, then send a test message to the chat.
- * Returns Vietnamese error strings suitable for direct UI display.
- */
-export async function testTelegram(
-  creds: TelegramCreds,
-): Promise<{ ok: true; botName: string } | { ok: false; error: string }> {
+export function botToken(): string | null {
+  return process.env.TELEGRAM_BOT_TOKEN || null;
+}
+
+export function telegramEnabled(): boolean {
+  return botToken() !== null;
+}
+
+let cachedUsername: string | null = null;
+
+/** The bot's @username, needed to build t.me deep links. Cached. */
+export async function getBotUsername(): Promise<string | null> {
+  if (cachedUsername) return cachedUsername;
+  const token = botToken();
+  if (!token) return null;
   try {
-    const meRes = await fetch(`${API}/bot${creds.botToken}/getMe`, {
+    const res = await fetch(`${API}/bot${token}/getMe`, {
       signal: AbortSignal.timeout(8_000),
       cache: "no-store",
     });
-    const me = (await meRes.json().catch(() => ({}))) as {
+    const j = (await res.json().catch(() => ({}))) as {
       ok?: boolean;
       result?: { username?: string };
-      description?: string;
     };
-    if (!me.ok) {
-      return {
-        ok: false,
-        error:
-          me.description === "Unauthorized"
-            ? "Bot token không hợp lệ. Kiểm tra lại token từ @BotFather."
-            : `Telegram từ chối token: ${me.description ?? "không rõ"}`,
-      };
+    if (j.ok && j.result?.username) {
+      cachedUsername = j.result.username;
+      return cachedUsername;
     }
-    const sent = await sendTelegram(
-      creds,
-      "✅ Vela đã kết nối Telegram thành công. Bạn sẽ nhận thông báo lệnh và tín hiệu quét ở đây.",
-    );
-    if (!sent) {
-      return {
-        ok: false,
-        error:
-          "Token đúng nhưng không gửi được tin tới chat ID này. Đã bấm Start cho bot chưa? Chat ID có đúng không?",
-      };
-    }
-    return { ok: true, botName: me.result?.username ?? "bot" };
-  } catch (e) {
-    return {
-      ok: false,
-      error:
-        e instanceof Error && e.name === "TimeoutError"
-          ? "Telegram không phản hồi trong 8 giây."
-          : e instanceof Error
-            ? e.message
-            : "Lỗi không xác định",
-    };
+  } catch {
+    // ignore — caller handles null
   }
+  return null;
 }
 
-/** Send one message. Returns false on any failure — never throws. */
-export async function sendTelegram(
-  creds: TelegramCreds,
+/** Low-level send to any chat id via the system bot. Never throws. */
+export async function sendToChat(
+  chatId: string | number,
   text: string,
 ): Promise<boolean> {
+  const token = botToken();
+  if (!token) return false;
   try {
-    const res = await fetch(`${API}/bot${creds.botToken}/sendMessage`, {
+    const res = await fetch(`${API}/bot${token}/sendMessage`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        chat_id: creds.chatId,
+        chat_id: chatId,
         text,
-        // Plain text — our messages contain user symbols and numbers that
-        // would need escaping in MarkdownV2; not worth the failure mode.
+        // Plain text — our messages carry symbols/numbers that would need
+        // MarkdownV2 escaping; not worth the failure mode.
         disable_web_page_preview: true,
       }),
       signal: AbortSignal.timeout(8_000),
@@ -99,14 +81,28 @@ export async function sendTelegram(
 }
 
 /**
- * Load creds and send in one call. No-op (returns false) when the user
- * hasn't connected Telegram — callers don't need to pre-check.
+ * DM a user. No-op (false) when the bot isn't configured or the user hasn't
+ * linked Telegram — callers don't need to pre-check.
  */
 export async function notifyUser(
   userId: string,
   text: string,
 ): Promise<boolean> {
-  const creds = await loadCreds<TelegramCreds>(userId, "TELEGRAM");
-  if (!creds) return false;
-  return sendTelegram(creds, text);
+  if (!telegramEnabled()) return false;
+  const user = await db.user.findUnique({
+    where: { id: userId },
+    select: { telegramChatId: true },
+  });
+  if (!user?.telegramChatId) return false;
+  return sendToChat(user.telegramChatId, text);
+}
+
+/**
+ * Post to the public broadcast channel (kiểu B). No-op when the bot or
+ * TELEGRAM_CHANNEL_ID isn't configured.
+ */
+export async function broadcastToChannel(text: string): Promise<boolean> {
+  const channel = process.env.TELEGRAM_CHANNEL_ID;
+  if (!telegramEnabled() || !channel) return false;
+  return sendToChat(channel, text);
 }
