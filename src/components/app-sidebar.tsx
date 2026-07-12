@@ -3,8 +3,9 @@
 import * as React from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { LineChart, LogOut, Gauge } from "lucide-react";
+import { LogOut, Gauge } from "lucide-react";
 import { signOut, useSession } from "next-auth/react";
+import { VelaMark } from "@/components/vela-mark";
 
 import {
   Sidebar,
@@ -43,11 +44,11 @@ export function AppSidebar({ isAdmin = false }: { isAdmin?: boolean }) {
           className="flex items-center gap-2 px-2 py-2 transition-opacity hover:opacity-80"
         >
           <div className="flex size-8 items-center justify-center rounded-md bg-primary text-primary-foreground shadow-sm">
-            <LineChart className="size-4" />
+            <VelaMark className="size-5" />
           </div>
           <div className="flex flex-col leading-tight group-data-[collapsible=icon]:hidden">
             <span className="text-sm font-semibold tracking-tight">
-              Tranding
+              Vela
             </span>
             <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
               Bảng điều khiển giao dịch
@@ -131,7 +132,7 @@ export function AppSidebar({ isAdmin = false }: { isAdmin?: boolean }) {
             onClick={() => {
               // Confirm — the icon sits next to the user block and an
               // accidental tap would dump the user out mid-workflow.
-              if (confirm("Đăng xuất khỏi Tranding?")) {
+              if (confirm("Đăng xuất khỏi Vela?")) {
                 void signOut({ callbackUrl: "/login" });
               }
             }}

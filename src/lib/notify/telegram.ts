@@ -49,7 +49,7 @@ export async function testTelegram(
     }
     const sent = await sendTelegram(
       creds,
-      "✅ Tranding đã kết nối Telegram thành công. Bạn sẽ nhận thông báo lệnh và tín hiệu quét ở đây.",
+      "✅ Vela đã kết nối Telegram thành công. Bạn sẽ nhận thông báo lệnh và tín hiệu quét ở đây.",
     );
     if (!sent) {
       return {

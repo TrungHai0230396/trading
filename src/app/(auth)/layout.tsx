@@ -1,4 +1,4 @@
-import { LineChart } from "lucide-react";
+import { VelaMark } from "@/components/vela-mark";
 
 export default function AuthLayout({
   children,
@@ -11,10 +11,10 @@ export default function AuthLayout({
         <div className="w-full max-w-sm space-y-6">
           <div className="flex items-center gap-2">
             <div className="flex size-9 items-center justify-center rounded-md bg-primary text-primary-foreground shadow-sm">
-              <LineChart className="size-4" />
+              <VelaMark className="size-5" />
             </div>
             <div className="leading-tight">
-              <div className="text-sm font-semibold">Tranding</div>
+              <div className="text-sm font-semibold">Vela</div>
               <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
                 Bảng điều khiển giao dịch
               </div>

@@ -9,7 +9,7 @@
 import Link from "next/link";
 
 export const metadata = {
-  title: "Điều khoản sử dụng — Tranding",
+  title: "Điều khoản sử dụng — Vela",
 };
 
 const UPDATED = "07/07/2026";
@@ -35,12 +35,12 @@ export default function TermsPage() {
         </section>
 
         <section>
-          <h2 className="text-base font-semibold">1. Tranding là gì</h2>
+          <h2 className="text-base font-semibold">1. Vela là gì</h2>
           <p className="mt-2">
-            Tranding là <strong>công cụ phần mềm</strong> hỗ trợ cá nhân tự
+            Vela là <strong>công cụ phần mềm</strong> hỗ trợ cá nhân tự
             quản lý hoạt động giao dịch của chính mình: nhật ký giao dịch,
             máy tính khối lượng lệnh, quét chỉ báo kỹ thuật đa khung thời
-            gian và thông báo tự động. Tranding <strong>không phải</strong>{" "}
+            gian và thông báo tự động. Vela <strong>không phải</strong>{" "}
             sàn giao dịch, không phải công ty môi giới, không phải đơn vị tư
             vấn đầu tư và không quản lý tiền của bạn.
           </p>
@@ -64,7 +64,7 @@ export default function TermsPage() {
         <section>
           <h2 className="text-base font-semibold">3. Tài khoản chỉ-đọc</h2>
           <p className="mt-2">
-            Mặc định, tài khoản Tranding hoạt động ở chế độ{" "}
+            Mặc định, tài khoản Vela hoạt động ở chế độ{" "}
             <strong>chỉ-đọc</strong>: khi bạn kết nối API sàn giao dịch, ứng
             dụng chỉ ĐỌC số dư, vị thế và lịch sử lệnh để đồng bộ nhật ký.
             Ứng dụng không đặt, sửa hay huỷ lệnh thay bạn. Chúng tôi khuyến
@@ -96,7 +96,7 @@ export default function TermsPage() {
           <h2 className="text-base font-semibold">5. Giới hạn trách nhiệm</h2>
           <p className="mt-2">
             Ứng dụng được cung cấp “nguyên trạng” (as-is). Trong phạm vi tối
-            đa pháp luật cho phép, Tranding không chịu trách nhiệm cho bất
+            đa pháp luật cho phép, Vela không chịu trách nhiệm cho bất
             kỳ tổn thất nào phát sinh từ: quyết định giao dịch của bạn; dữ
             liệu thị trường sai/chậm từ bên thứ ba (Binance, Bitget, nhà
             cung cấp dữ liệu); gián đoạn dịch vụ, lỗi phần mềm; hoặc thông

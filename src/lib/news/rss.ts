@@ -90,7 +90,7 @@ async function fetchSingleFeed(
       headers: {
         // Some publishers block default fetch UA.
         "User-Agent":
-          "Mozilla/5.0 (compatible; Tranding/1.0; +https://github.com/) RSS reader",
+          "Mozilla/5.0 (compatible; Vela/1.0; +https://github.com/) RSS reader",
         Accept: "application/rss+xml, application/xml;q=0.9, */*;q=0.8",
       },
     });
