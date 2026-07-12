@@ -4,10 +4,8 @@
  * The bot token lives server-side in TELEGRAM_BOT_TOKEN (never exposed).
  * Users link by pressing Start on the bot via a deep link (see
  * telegram-link.ts + telegram-poll.ts), which stores their chat id on the
- * User row. Alerts then DM that chat through the shared bot.
- *
- * TELEGRAM_CHANNEL_ID (optional) is a public channel/group the bot posts
- * broadcast signals to (everyone who joins the channel sees them).
+ * User row. Alerts then DM that chat through the shared bot — each user gets
+ * only what their own watchlist + consensus config produces.
  *
  * All sends are fire-and-forget with a short timeout — a Telegram outage
  * must NEVER block or fail a sync/scan flow.
@@ -95,14 +93,4 @@ export async function notifyUser(
   });
   if (!user?.telegramChatId) return false;
   return sendToChat(user.telegramChatId, text);
-}
-
-/**
- * Post to the public broadcast channel (kiểu B). No-op when the bot or
- * TELEGRAM_CHANNEL_ID isn't configured.
- */
-export async function broadcastToChannel(text: string): Promise<boolean> {
-  const channel = process.env.TELEGRAM_CHANNEL_ID;
-  if (!telegramEnabled() || !channel) return false;
-  return sendToChat(channel, text);
 }
