@@ -4,6 +4,7 @@ import {
   BookOpenText,
   Radar,
   Settings,
+  MessageSquarePlus,
   type LucideIcon,
 } from "lucide-react";
 
@@ -57,6 +58,12 @@ export const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
         label: "Cài đặt",
         href: "/settings",
         icon: Settings,
+      },
+      {
+        label: "Liên hệ & Góp ý",
+        href: "/feedback",
+        icon: MessageSquarePlus,
+        description: "Báo lỗi, đề xuất tính năng",
       },
     ],
   },

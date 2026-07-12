@@ -10,7 +10,7 @@
 
 import "server-only";
 
-function adminEmails(): string[] {
+export function adminEmails(): string[] {
   const raw =
     process.env.ADMIN_EMAILS ?? process.env.AUTOTRADE_ALLOWED_EMAILS ?? "";
   return raw

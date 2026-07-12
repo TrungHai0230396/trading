@@ -43,6 +43,17 @@ export type AdminStats = {
     name: string | null;
     createdAt: string;
   }[];
+  feedback: {
+    newCount: number;
+    recent: {
+      id: string;
+      type: string;
+      message: string;
+      email: string | null;
+      context: string | null;
+      createdAt: string;
+    }[];
+  };
 };
 
 function since(ms: number): Date {
@@ -77,6 +88,8 @@ export async function getAdminStats(): Promise<AdminStats> {
     dbBytesRaw,
     dbPing,
     recent,
+    feedbackNew,
+    feedbackRecent,
   ] = await Promise.all([
     db.user.count(),
     db.user.count({ where: { createdAt: { gte: since(DAY) } } }),
@@ -115,6 +128,19 @@ export async function getAdminStats(): Promise<AdminStats> {
       orderBy: { createdAt: "desc" },
       take: 10,
       select: { id: true, email: true, name: true, createdAt: true },
+    }),
+    db.feedback.count({ where: { status: "new" } }),
+    db.feedback.findMany({
+      orderBy: { createdAt: "desc" },
+      take: 15,
+      select: {
+        id: true,
+        type: true,
+        message: true,
+        email: true,
+        context: true,
+        createdAt: true,
+      },
     }),
   ]);
 
@@ -159,5 +185,16 @@ export async function getAdminStats(): Promise<AdminStats> {
       name: u.name,
       createdAt: u.createdAt.toISOString(),
     })),
+    feedback: {
+      newCount: feedbackNew,
+      recent: feedbackRecent.map((f) => ({
+        id: f.id,
+        type: f.type as string,
+        message: f.message,
+        email: f.email,
+        context: f.context,
+        createdAt: f.createdAt.toISOString(),
+      })),
+    },
   };
 }

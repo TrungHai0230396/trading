@@ -432,3 +432,29 @@ model BrokerOrder {
   @@index([tradeJournalId])
   @@index([status])
 }
+
+// ──────────────────────────────────────────────────────────────────────
+// Feedback — bug reports / feature requests from testers
+// ──────────────────────────────────────────────────────────────────────
+
+enum FeedbackType {
+  BUG
+  FEATURE
+  OTHER
+}
+
+model Feedback {
+  id        String       @id @default(cuid())
+  // Plain string (not a relation) so feedback survives user deletion — it's
+  // a record of what was reported, not user-owned data.
+  userId    String?
+  email     String? // captured from session so the owner can reply
+  type      FeedbackType @default(OTHER)
+  message   String       @db.Text
+  context   String? // page/URL the user was on, optional
+  status    String       @default("new") // new | seen | done
+  createdAt DateTime     @default(now())
+
+  @@index([createdAt])
+  @@index([status])
+}

@@ -66,6 +66,12 @@ const CRON_LABELS: Record<string, string> = {
   "news-refresh": "Làm mới tin (1 giờ)",
 };
 
+const FEEDBACK_LABEL: Record<string, string> = {
+  BUG: "🐞 Lỗi",
+  FEATURE: "✨ Tính năng",
+  OTHER: "💬 Góp ý",
+};
+
 export default async function AdminPage() {
   const session = await auth();
   if (!isAdminEmail(session?.user?.email)) {
@@ -233,6 +239,46 @@ export default async function AdminPage() {
               value={fmtBytes(stats.storage.dbBytes)}
             />
           </div>
+        </CardContent>
+      </Card>
+
+      {/* ── Phản hồi người dùng ───────────────────────────────────────── */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base">
+            Phản hồi
+            {stats.feedback.newCount > 0 ? (
+              <Badge className="bg-primary/15 text-primary">
+                {stats.feedback.newCount} mới
+              </Badge>
+            ) : null}
+          </CardTitle>
+          <CardDescription>
+            Báo lỗi & góp ý gửi từ trang Liên hệ (15 mục gần nhất).
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {stats.feedback.recent.length === 0 ? (
+            <p className="text-sm text-muted-foreground">Chưa có phản hồi nào.</p>
+          ) : (
+            <ul className="space-y-2.5">
+              {stats.feedback.recent.map((f) => (
+                <li key={f.id} className="rounded-lg border bg-card/40 p-3">
+                  <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+                    <span className="font-medium text-foreground">
+                      {FEEDBACK_LABEL[f.type] ?? f.type}
+                    </span>
+                    <span>{new Date(f.createdAt).toLocaleString("vi-VN")}</span>
+                  </div>
+                  <p className="mt-1 whitespace-pre-wrap text-sm">{f.message}</p>
+                  <div className="mt-1.5 flex flex-wrap gap-x-3 text-[11px] text-muted-foreground">
+                    {f.email ? <span>{f.email}</span> : null}
+                    {f.context ? <span>· {f.context}</span> : null}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
         </CardContent>
       </Card>
 
