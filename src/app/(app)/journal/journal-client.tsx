@@ -229,16 +229,42 @@ export function JournalClient() {
     return m;
   }, [liveQuotes.data]);
 
-  // Run sync once on mount, then poll every 60s while the journal page is
-  // open — safe (read-only), and it means a fill/close/cancel that happens
-  // while the user sits on this page shows up without a manual refresh. The
-  // server rate-limits this to 6/min so the interval can never overrun it.
+  // Broker sync only exists for CRYPTO exchanges — a user with no broker
+  // connected (or a pure forex journal) must not see the button, and the
+  // auto-poll must not fire pointless requests every 60s.
+  const brokerStatus = useQuery<{ connected: boolean }>({
+    queryKey: ["journal", "broker-connected"],
+    queryFn: async ({ signal }) => {
+      const [bg, bn] = await Promise.all([
+        fetch("/api/brokers/bitget/keys", { signal })
+          .then((r) => (r.ok ? r.json() : { connected: false }))
+          .catch(() => ({ connected: false })),
+        fetch("/api/brokers/binance/keys", { signal })
+          .then((r) => (r.ok ? r.json() : { connected: false }))
+          .catch(() => ({ connected: false })),
+      ]);
+      return {
+        connected:
+          (bg as { connected?: boolean }).connected === true ||
+          (bn as { connected?: boolean }).connected === true,
+      };
+    },
+    staleTime: 5 * 60_000,
+  });
+  const brokerConnected = brokerStatus.data?.connected === true;
+
+  // Run sync once when we learn a broker IS connected, then poll every 60s
+  // while the journal page is open — safe (read-only), and it means a
+  // fill/close/cancel that happens while the user sits on this page shows
+  // up without a manual refresh. The server rate-limits this to 6/min so
+  // the interval can never overrun it.
   const didAutoSync = React.useRef(false);
-  // Mirror isPending into a ref so the interval closure (empty deps) reads
-  // the CURRENT value, not the stale first-render one.
+  // Mirror isPending into a ref so the interval closure reads the CURRENT
+  // value, not the stale first-render one.
   const syncPendingRef = React.useRef(false);
   syncPendingRef.current = syncBitget.isPending;
   React.useEffect(() => {
+    if (!brokerConnected) return;
     if (!didAutoSync.current) {
       didAutoSync.current = true;
       syncBitget.mutate();
@@ -249,7 +275,7 @@ export function JournalClient() {
     }, 60_000);
     return () => clearInterval(interval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [brokerConnected]);
 
   return (
     <div className="space-y-6">
@@ -262,33 +288,37 @@ export function JournalClient() {
             Bộ lọc
           </CardTitle>
           <div className="flex items-center gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => {
-                syncBitget.mutate(undefined, {
-                  onSuccess: (data) => {
-                    if (data.changes.length === 0 && data.errors.length === 0) {
-                      toast.message("Không có thay đổi từ Bitget.");
-                    }
-                  },
-                  onError: (err) => {
-                    toast.error(
-                      err instanceof Error ? err.message : "Đồng bộ thất bại",
-                    );
-                  },
-                });
-              }}
-              disabled={syncBitget.isPending}
-              title="Kéo trạng thái mới nhất từ Bitget. Chỉ đọc, không đặt/huỷ lệnh."
-            >
-              {syncBitget.isPending ? (
-                <Loader2 className="size-4 animate-spin" />
-              ) : (
-                <RefreshCcw className="size-4" />
-              )}
-              Đồng bộ Bitget
-            </Button>
+            {/* Sync is a crypto-exchange feature: hidden when no broker is
+                connected AND when the user is looking at forex. */}
+            {brokerConnected && filters.market !== "FOREX" ? (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  syncBitget.mutate(undefined, {
+                    onSuccess: (data) => {
+                      if (data.changes.length === 0 && data.errors.length === 0) {
+                        toast.message("Không có thay đổi từ sàn.");
+                      }
+                    },
+                    onError: (err) => {
+                      toast.error(
+                        err instanceof Error ? err.message : "Đồng bộ thất bại",
+                      );
+                    },
+                  });
+                }}
+                disabled={syncBitget.isPending}
+                title="Kéo trạng thái mới nhất từ sàn crypto đã kết nối. Chỉ đọc, không đặt/huỷ lệnh."
+              >
+                {syncBitget.isPending ? (
+                  <Loader2 className="size-4 animate-spin" />
+                ) : (
+                  <RefreshCcw className="size-4" />
+                )}
+                Đồng bộ sàn
+              </Button>
+            ) : null}
             <Button
               variant="outline"
               size="sm"
