@@ -137,6 +137,9 @@ function ErrorCard({
   message: string;
   onRetry: () => void;
 }) {
+  const isBudget = /429|quota|giới hạn ai|hết lượt|resource.?exhausted/i.test(
+    message,
+  );
   const isOverload = /quá tải|overload|unavail|503|high demand/i.test(message);
   return (
     <Card>
@@ -146,9 +149,11 @@ function ErrorCard({
           Phân tích AI
         </CardTitle>
         <CardDescription>
-          {isOverload
-            ? "Gemini đang quá tải. Chờ vài giây rồi bấm Thử lại."
-            : "Có lỗi khi gọi Gemini. Xem chi tiết bên dưới rồi thử lại."}
+          {isBudget
+            ? "Đã chạm giới hạn AI (theo giờ/ngày). Quay lại sau nhé — phần kế hoạch & tín hiệu phía trên không bị ảnh hưởng."
+            : isOverload
+              ? "Gemini đang quá tải. Chờ vài giây rồi bấm Thử lại."
+              : "Có lỗi khi gọi Gemini. Xem chi tiết bên dưới rồi thử lại."}
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">

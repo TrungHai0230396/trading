@@ -24,7 +24,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { tradingViewUrl } from "@/lib/scanner/tradingview";
 
-import { DataCards } from "./_components/data-cards";
+import { DataCardsTop, DataCardsEvidence } from "./_components/data-cards";
 import { AiCard } from "./_components/ai-card";
 import { ActionBarShell } from "./_components/action-bar-shell";
 
@@ -95,17 +95,24 @@ export default async function AnalysisPage({
       />
 
       <div className="space-y-4">
+        {/* Decision block: hero + your context + the plan. */}
         <Suspense fallback={<DataCardsSkeleton />}>
-          <DataCards args={snapshotArgs} />
+          <DataCardsTop args={snapshotArgs} />
         </Suspense>
 
-        {/* AI is now user-triggered — no Suspense / no auto-fetch.
-            Saves Gemini quota and avoids 503 blocking page load. */}
+        {/* AI narrative sits right under the plan it explains. User-
+            triggered — no Suspense / no auto-fetch (saves Gemini quota). */}
         <AiCard market={typedMarket} symbol={symbol} />
 
-        {/* Mobile-sticky / desktop-static action bar — placed at the
-            very bottom so it doesn't sandwich between content cards. */}
-        <Suspense fallback={null}>
+        {/* Evidence: per-TF table, volume/structure, news. */}
+        <Suspense fallback={<EvidenceSkeleton />}>
+          <DataCardsEvidence args={snapshotArgs} />
+        </Suspense>
+
+        {/* Mobile-sticky / desktop-static action bar. Skeleton fallback:
+            without it the sticky bar popped in seconds after first paint —
+            layout shift right where the user decides to act. */}
+        <Suspense fallback={<ActionBarSkeleton />}>
           <ActionBarShell args={snapshotArgs} />
         </Suspense>
       </div>
@@ -114,6 +121,33 @@ export default async function AnalysisPage({
 }
 
 // ── skeletons ────────────────────────────────────────────────────────
+
+function EvidenceSkeleton() {
+  return (
+    <div className="grid gap-4 md:grid-cols-2">
+      {[0, 1].map((i) => (
+        <Card key={i}>
+          <CardHeader>
+            <Skeleton className="h-5 w-32" />
+          </CardHeader>
+          <CardContent>
+            <Skeleton className="h-32" />
+          </CardContent>
+        </Card>
+      ))}
+    </div>
+  );
+}
+
+function ActionBarSkeleton() {
+  return (
+    <div className="flex flex-wrap items-center gap-2 py-2">
+      {[0, 1, 2].map((i) => (
+        <Skeleton key={i} className="h-8 w-36 flex-1 md:flex-none" />
+      ))}
+    </div>
+  );
+}
 
 function DataCardsSkeleton() {
   return (

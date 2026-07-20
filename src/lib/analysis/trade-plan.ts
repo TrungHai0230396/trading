@@ -42,6 +42,12 @@ export type TradePlanInput = {
    *  if not enough data; falls back to ATR-only SL with a warning. */
   swingLow: number | null;
   swingHigh: number | null;
+  /** Nearest daily-fractal support BELOW entry (first element = closest).
+   *  Used to keep a LONG stop from sitting just above a known support. */
+  nearestSupport?: number | null;
+  /** Nearest daily-fractal resistance ABOVE entry. Mirror for SHORT SL,
+   *  and used to compute TP headroom. */
+  nearestResistance?: number | null;
   /** Account balance in account currency (≈ USDT for crypto futures). */
   accountBalance: number;
   /** Risk percent of balance, e.g. 0.01 = 1%. */
@@ -67,8 +73,14 @@ export type TradePlan = {
   riskAmount: number;
   /** Smallest leverage that lets the position fit at all (notional / balance, rounded up). */
   leverageRequired: number;
-  /** Estimated liquidation price assuming isolated, zero maintenance margin. */
-  liquidationPrice: number;
+  /** Estimated isolated liquidation price (includes ~0.5% maintenance
+   *  margin). Null at 1× — practically un-liquidatable before SL. */
+  liquidationPrice: number | null;
+  /** Distance from entry to the first barrier (resistance for LONG,
+   *  support for SHORT) expressed in R. Null when no barrier is known. */
+  headroomR: number | null;
+  /** The barrier price used for headroomR. */
+  firstBarrier: number | null;
   /** Margin (account currency) sàn will lock = notional / leverageRequired. */
   margin: number;
   /** Round-trip taker fee estimate in account currency. */
@@ -115,6 +127,36 @@ export function computeTradePlan(input: TradePlanInput): TradePlan {
     );
   }
 
+  // Respect the daily-fractal level the page itself displays: a LONG stop
+  // parked just ABOVE a known support gets wicked out on a routine support
+  // test (mirror for SHORT vs resistance). If the level sits between the
+  // SL and entry, move the SL just beyond it when that stays within the
+  // max-width cap; otherwise keep the SL but warn about the conflict.
+  const barrierBehind = isLong
+    ? (input.nearestSupport ?? null)
+    : (input.nearestResistance ?? null);
+  if (barrierBehind !== null && atr > 0) {
+    const between = isLong
+      ? barrierBehind < entry && barrierBehind > slPrice
+      : barrierBehind > entry && barrierBehind < slPrice;
+    if (between) {
+      const beyond = isLong
+        ? barrierBehind - 0.25 * atr
+        : barrierBehind + 0.25 * atr;
+      const beyondPct = Math.abs(entry - beyond) / entry;
+      if (beyondPct <= MAX_SL_PCT) {
+        slPrice = beyond;
+        warnings.push(
+          `SL dời ra sau ${isLong ? "hỗ trợ" : "kháng cự"} ${fmtLevel(barrierBehind)} để tránh bị quét tại cấu trúc`,
+        );
+      } else {
+        warnings.push(
+          `SL nằm ${isLong ? "trên hỗ trợ" : "dưới kháng cự"} ${fmtLevel(barrierBehind)} — dễ bị quét khi giá kiểm tra lại vùng này`,
+        );
+      }
+    }
+  }
+
   let slDistance = Math.abs(entry - slPrice);
   let slPct = slDistance / entry;
 
@@ -155,17 +197,48 @@ export function computeTradePlan(input: TradePlanInput): TradePlan {
   );
   const margin = notional / leverageRequired;
 
-  // Approximate isolated-margin liquidation (zero maintenance margin):
-  //   LONG : liq = entry × (1 − 1/leverage)
-  //   SHORT: liq = entry × (1 + 1/leverage)
-  const liquidationPrice = isLong
-    ? entry * (1 - 1 / leverageRequired)
-    : entry * (1 + 1 / leverageRequired);
-  const liqDistance = Math.abs(entry - liquidationPrice);
-  if (liqDistance < slDistance * 1.5) {
-    warnings.push(
-      "Giá thanh lý quá gần SL — tăng vốn hoặc giảm rủi ro để có buffer",
-    );
+  // Approximate isolated-margin liquidation INCLUDING maintenance margin
+  // (~0.5%, conservative retail tier) — omitting MMR shows a liq that is
+  // FARTHER from entry than the exchange's real one, optimistic in exactly
+  // the direction that loses money:
+  //   LONG : liq = entry × (1 − 1/L + MMR)
+  //   SHORT: liq = entry × (1 + 1/L − MMR)
+  // At 1× the position is practically un-liquidatable before the SL —
+  // report null instead of a nonsense near-zero price.
+  const MMR = 0.005;
+  const liquidationPrice =
+    leverageRequired <= 1
+      ? null
+      : isLong
+        ? entry * (1 - 1 / leverageRequired + MMR)
+        : entry * (1 + 1 / leverageRequired - MMR);
+  if (liquidationPrice !== null) {
+    const liqDistance = Math.abs(entry - liquidationPrice);
+    if (liqDistance < slDistance * 1.5) {
+      warnings.push(
+        "Giá thanh lý quá gần SL — tăng vốn hoặc giảm rủi ro để có buffer",
+      );
+    }
+  }
+
+  // Headroom to the first barrier IN FRONT of the trade (resistance for
+  // LONG, support for SHORT), in R. Warn when TP2 sits beyond it — the
+  // market has a known reason to stall before the target.
+  const barrierAhead = isLong
+    ? (input.nearestResistance ?? null)
+    : (input.nearestSupport ?? null);
+  let headroomR: number | null = null;
+  if (barrierAhead !== null && slDistance > 0) {
+    const ahead = isLong ? barrierAhead > entry : barrierAhead < entry;
+    if (ahead) {
+      headroomR = Math.abs(barrierAhead - entry) / slDistance;
+      const tp2Beyond = isLong ? tp2Price > barrierAhead : tp2Price < barrierAhead;
+      if (tp2Beyond) {
+        warnings.push(
+          `TP2 vượt ${isLong ? "kháng cự" : "hỗ trợ"} đầu tiên ${fmtLevel(barrierAhead)} (+${headroomR.toFixed(1)}R) — cân nhắc chốt sớm tại đó`,
+        );
+      }
+    }
   }
 
   const expectedFees = notional * FEE_RT;
@@ -178,7 +251,11 @@ export function computeTradePlan(input: TradePlanInput): TradePlan {
 
   return {
     direction: input.direction,
-    entryPrice: round(entry, 2),
+    // priceDp, NOT a fixed 2dp: round(0.0894, 2) rendered "Entry 0.09" —
+    // a ~20% error in the entry→SL distance that leaked into the copy
+    // text and the calculator/journal deep-links (and floored sub-$0.005
+    // coins to a literal 0).
+    entryPrice: round(entry, priceDp(entry)),
     slPrice: round(slPrice, priceDp(entry)),
     slPct: round(slPct * 100, 2),
     atrMultiple: round(atrMultiple, 2),
@@ -190,7 +267,13 @@ export function computeTradePlan(input: TradePlanInput): TradePlan {
     notional: round(notional, 2),
     riskAmount: round(riskAmount, 2),
     leverageRequired,
-    liquidationPrice: round(liquidationPrice, priceDp(entry)),
+    liquidationPrice:
+      liquidationPrice === null ? null : round(liquidationPrice, priceDp(entry)),
+    headroomR: headroomR === null ? null : round(headroomR, 1),
+    firstBarrier:
+      barrierAhead !== null && headroomR !== null
+        ? round(barrierAhead, priceDp(entry))
+        : null,
     margin: round(margin, 2),
     expectedFees: round(expectedFees, 2),
     feesPctOfR: round(feesPctOfR, 1),
@@ -217,6 +300,11 @@ function round(n: number, dp: number): number {
   if (!Number.isFinite(n)) return n;
   const f = 10 ** dp;
   return Math.round(n * f) / f;
+}
+
+/** Short price label for warning strings. */
+function fmtLevel(price: number): string {
+  return String(round(price, priceDp(price)));
 }
 
 /** Number of decimal places to use for a price, scaling with magnitude. */

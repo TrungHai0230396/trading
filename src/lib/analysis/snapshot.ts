@@ -11,14 +11,22 @@
  */
 
 import { cache } from "react";
+import { db } from "@/lib/db";
 import { scanSymbol } from "@/lib/scanner/runner";
 import { getOHLCV, type OHLCVBar } from "@/lib/scanner/ohlcv";
 import { getBinance24hTicker } from "@/lib/quotes/binance";
+import { getPortfolio } from "@/lib/brokers/spot";
 import {
   getRelatedNews,
   type RelatedNewsItem,
 } from "@/lib/insights/related-news";
 import { lastAtr } from "@/lib/indicators/atr";
+import {
+  cachedSetupHistory,
+  computeSignalAge,
+  type SetupHistory,
+  type SignalAge,
+} from "./setup-history";
 import {
   computeRecommendation,
   type RecommendationResult,
@@ -58,6 +66,21 @@ export type VolumeStats = {
   classification: "high" | "low" | "normal";
 };
 
+/** The user's own relationship with this symbol — journal + watchlist. */
+export type UserContext = {
+  /** OPEN journal trades on this symbol right now. */
+  openTrades: { direction: "LONG" | "SHORT"; entryPrice: number }[];
+  closedCount: number;
+  /** Sum of rMultiple over closed trades that have one. */
+  totalR: number | null;
+  lastTrade: {
+    direction: "LONG" | "SHORT";
+    rMultiple: number | null;
+    closedAt: string | null;
+  } | null;
+  inWatchlist: boolean;
+};
+
 export type AnalysisSnapshot = {
   symbol: string;
   base: string;
@@ -81,7 +104,16 @@ export type AnalysisSnapshot = {
   tradePlan: TradePlan | null;
   /** Account context used to compute the plan. */
   accountBalance: number;
+  /** Where the balance came from — "real" broker equity or the assumed
+   *  fallback (no broker connected / fetch failed). */
+  balanceSource: "real" | "assumed";
   riskPercent: number;
+  /** How long the 4h signal has been on the current side (null on WAIT). */
+  signalAge: SignalAge | null;
+  /** Replay of historical 4h flips into the current side (null on WAIT). */
+  setupHistory: SetupHistory | null;
+  /** The user's own journal/watchlist relationship with this symbol. */
+  userContext: UserContext;
 };
 
 const DEFAULT_TFS = ["1h", "4h", "1d", "1w"] as const;
@@ -112,38 +144,51 @@ export async function buildAnalysisSnapshot(opts: {
       ? parseCryptoSymbol(symbol).base.toUpperCase()
       : (findForexPair(symbol)?.base ?? symbol.slice(0, 3)).toUpperCase();
 
-  const accountBalance = opts.accountBalance ?? loadDefaultBalance();
   const riskPercent = opts.riskPercent ?? 0.01; // 1% default
 
   const planTF: "4h" | "1d" =
     market === "CRYPTO" ? TF_FOR_PLAN_CRYPTO : TF_FOR_PLAN_FOREX;
 
-  // Kick off all expensive I/O in parallel.
-  const [consensus, planTfBars, dailyBars, ticker, news] = await Promise.all([
-    scanSymbol({
-      runId: "",
-      market,
-      symbol,
-      timeframes: [...DEFAULT_TFS],
-      indicators: ["ema-wma-on-rsi"],
-      limit: 200,
-      persist: false,
-    }),
-    safeOhlcv({ market, symbol, timeframe: planTF, limit: 80 }),
-    market === "CRYPTO"
-      ? safeOhlcv({ market, symbol, timeframe: "1d", limit: 60 })
-      : Promise.resolve<OHLCVBar[]>([]),
-    market === "CRYPTO"
-      ? safeTicker(symbol)
-      : Promise.resolve<{
-          lastPrice: number;
-          priceChangePercent: number;
-          highPrice: number;
-          lowPrice: number;
-          quoteVolume: number;
-        } | null>(null),
-    safeNews({ userId: opts.userId, market, symbol, limit: 8 }),
-  ]);
+  // Kick off all expensive I/O in parallel. Plan-TF bars are fetched deep
+  // (1000 ≈ 5-6 months of 4h) — the tail feeds ATR/swings as before, the
+  // full series feeds signal-age + setup-history replay.
+  const [consensus, planTfBars, dailyBars, ticker, news, realBalance, userContext] =
+    await Promise.all([
+      scanSymbol({
+        runId: "",
+        market,
+        symbol,
+        timeframes: [...DEFAULT_TFS],
+        indicators: ["ema-wma-on-rsi"],
+        limit: 200,
+        persist: false,
+      }),
+      safeOhlcv({ market, symbol, timeframe: planTF, limit: 1000 }),
+      market === "CRYPTO"
+        ? safeOhlcv({ market, symbol, timeframe: "1d", limit: 60 })
+        : Promise.resolve<OHLCVBar[]>([]),
+      market === "CRYPTO"
+        ? safeTicker(symbol)
+        : Promise.resolve<{
+            lastPrice: number;
+            priceChangePercent: number;
+            highPrice: number;
+            lowPrice: number;
+            quoteVolume: number;
+          } | null>(null),
+      safeNews({ userId: opts.userId, market, symbol, limit: 8 }),
+      opts.accountBalance !== undefined
+        ? Promise.resolve<number | null>(null)
+        : safeRealBalance(opts.userId),
+      safeUserContext(opts.userId, symbol),
+    ]);
+
+  const accountBalance =
+    opts.accountBalance ?? realBalance ?? loadDefaultBalance();
+  const balanceSource: "real" | "assumed" =
+    opts.accountBalance !== undefined || realBalance !== null
+      ? "real"
+      : "assumed";
 
   // Derive price stats. Prefer 24h ticker (Binance) when available,
   // fall back to last close of the plan-TF bars (forex path).
@@ -225,18 +270,28 @@ export async function buildAnalysisSnapshot(opts: {
 
   // Trade plan only when we have a side. WAIT → no plan.
   let tradePlan: TradePlan | null = null;
+  let signalAge: SignalAge | null = null;
+  let setupHistory: SetupHistory | null = null;
   if (recommendation.verdict !== "WAIT" && lastPrice > 0 && atrValue !== null) {
+    const direction = verdictToDirection(recommendation.verdict);
     tradePlan = computeTradePlan({
       symbol,
       base,
-      direction: verdictToDirection(recommendation.verdict),
+      direction,
       lastPrice,
       atr: atrValue,
       swingLow,
       swingHigh,
+      nearestSupport: support[0]?.price ?? null,
+      nearestResistance: resistance[0]?.price ?? null,
       accountBalance,
       riskPercent,
     });
+    // Both are pure math over the already-fetched 4h series.
+    if (planTF === "4h" && planTfBars.length > 0) {
+      signalAge = computeSignalAge(planTfBars, direction);
+      setupHistory = cachedSetupHistory(symbol, direction, planTfBars);
+    }
   }
 
   return {
@@ -258,7 +313,11 @@ export async function buildAnalysisSnapshot(opts: {
     recommendation,
     tradePlan,
     accountBalance,
+    balanceSource,
     riskPercent,
+    signalAge,
+    setupHistory,
+    userContext,
   };
 }
 
@@ -311,9 +370,85 @@ function rsiFromTF(tf: PerTimeframeResult | undefined): number | null {
 }
 
 function loadDefaultBalance(): number {
-  // Reasonable default for retail-trader analysis. Future: read from
-  // settings table or user profile.
+  // Fallback when no broker is connected — the UI labels the numbers
+  // "giả định" in this case so nobody sizes real money off it.
   return 1000;
+}
+
+/**
+ * The user's REAL futures equity across connected brokers (60s-cached in
+ * lib/brokers/spot.ts). Null → caller falls back to the assumed balance.
+ * Futures equity (not spot) because the plan is a USDT-M futures trade.
+ */
+async function safeRealBalance(userId: string): Promise<number | null> {
+  try {
+    const p = await getPortfolio(userId);
+    if (p.brokers.length === 0) return null;
+    const futures = p.totals.futuresUsd;
+    if (Number.isFinite(futures) && futures > 0) return futures;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+async function safeUserContext(
+  userId: string,
+  symbol: string,
+): Promise<UserContext> {
+  const empty: UserContext = {
+    openTrades: [],
+    closedCount: 0,
+    totalR: null,
+    lastTrade: null,
+    inWatchlist: false,
+  };
+  try {
+    const [trades, watch] = await Promise.all([
+      db.tradeJournal.findMany({
+        where: { userId, symbol },
+        orderBy: { openedAt: "desc" },
+        take: 50,
+        select: {
+          status: true,
+          direction: true,
+          entryPrice: true,
+          rMultiple: true,
+          closedAt: true,
+        },
+      }),
+      db.watchlistSymbol.findFirst({
+        where: { userId, symbol, market: "CRYPTO" },
+        select: { id: true },
+      }),
+    ]);
+
+    const open = trades.filter((t) => t.status === "OPEN");
+    const closed = trades.filter((t) => t.status === "CLOSED");
+    const rs = closed
+      .map((t) => (t.rMultiple === null ? null : Number(t.rMultiple)))
+      .filter((r): r is number => r !== null && Number.isFinite(r));
+    const last = closed[0] ?? null;
+
+    return {
+      openTrades: open.map((t) => ({
+        direction: t.direction as "LONG" | "SHORT",
+        entryPrice: Number(t.entryPrice),
+      })),
+      closedCount: closed.length,
+      totalR: rs.length > 0 ? Math.round(rs.reduce((s, r) => s + r, 0) * 100) / 100 : null,
+      lastTrade: last
+        ? {
+            direction: last.direction as "LONG" | "SHORT",
+            rMultiple: last.rMultiple === null ? null : Number(last.rMultiple),
+            closedAt: last.closedAt ? last.closedAt.toISOString() : null,
+          }
+        : null,
+      inWatchlist: Boolean(watch),
+    };
+  } catch {
+    return empty;
+  }
 }
 
 /**

@@ -2,7 +2,8 @@
 
 import * as React from "react";
 import Link from "next/link";
-import { Copy, Check, BookOpen, Calculator } from "lucide-react";
+import { toast } from "sonner";
+import { Copy, Check, BookOpen, Calculator, Bell, BellRing, Loader2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -15,6 +16,7 @@ export function ActionBar({
   base,
   market,
   accountBalance,
+  initialInWatchlist,
 }: {
   verdict: "ENTER_LONG" | "ENTER_SHORT" | "WAIT";
   tradePlan: TradePlan | null;
@@ -22,9 +24,36 @@ export function ActionBar({
   base: string;
   market: "CRYPTO" | "FOREX";
   accountBalance: number;
+  initialInWatchlist: boolean;
 }) {
   const [copied, setCopied] = React.useState(false);
+  const [watched, setWatched] = React.useState(initialInWatchlist);
+  const [watchBusy, setWatchBusy] = React.useState(false);
   const isWait = verdict === "WAIT" || !tradePlan;
+
+  const follow = React.useCallback(async () => {
+    setWatchBusy(true);
+    try {
+      const res = await fetch("/api/watchlist", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ symbol, market: "CRYPTO" }),
+      });
+      const d = (await res.json().catch(() => null)) as { error?: string } | null;
+      if (!res.ok) {
+        toast.error(d?.error ?? `Lỗi ${res.status}`);
+        return;
+      }
+      setWatched(true);
+      toast.success(
+        `Đang theo dõi ${symbol} — Telegram sẽ báo khi đạt/gãy đồng thuận.`,
+      );
+    } catch {
+      toast.error("Không gửi được yêu cầu — kiểm tra mạng.");
+    } finally {
+      setWatchBusy(false);
+    }
+  }, [symbol]);
 
   const copyText = React.useCallback(() => {
     if (!tradePlan) return;
@@ -81,6 +110,46 @@ export function ActionBar({
       }}
     >
       <div className="flex flex-wrap items-center gap-2">
+        {/* Terminal action first — it was buried in the last slot while
+            "copy" (the least consequential button) held prime position. */}
+        <Button
+          size="sm"
+          className="flex-1 md:flex-none"
+          render={<Link href={journalHref} />}
+        >
+          <BookOpen className="size-4" />
+          Tạo lệnh
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          className="flex-1 md:flex-none"
+          render={<Link href={calcHref} />}
+        >
+          <Calculator className="size-4" />
+          Tính lot
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          className="flex-1 md:flex-none"
+          onClick={follow}
+          disabled={watched || watchBusy}
+          title={
+            watched
+              ? "Đã theo dõi — chỉnh khung riêng trong panel Watchlist ở trang Quét"
+              : "Thêm vào watchlist — Telegram báo khi đạt/gãy đồng thuận"
+          }
+        >
+          {watchBusy ? (
+            <Loader2 className="size-4 animate-spin" />
+          ) : watched ? (
+            <BellRing className="size-4 text-primary" />
+          ) : (
+            <Bell className="size-4" />
+          )}
+          {watched ? "Đang theo dõi" : "Theo dõi"}
+        </Button>
         <Button
           variant="outline"
           size="sm"
@@ -94,24 +163,7 @@ export function ActionBar({
           ) : (
             <Copy className="size-4" />
           )}
-          {copied ? "Đã copy" : "Sao chép kế hoạch"}
-        </Button>
-        <Button
-          variant="outline"
-          size="sm"
-          className="flex-1 md:flex-none"
-          render={<Link href={calcHref} />}
-        >
-          <Calculator className="size-4" />
-          Tính lot
-        </Button>
-        <Button
-          size="sm"
-          className="flex-1 md:flex-none"
-          render={<Link href={journalHref} />}
-        >
-          <BookOpen className="size-4" />
-          Tạo lệnh
+          {copied ? "Đã copy" : "Sao chép"}
         </Button>
       </div>
     </div>

@@ -32,6 +32,7 @@ export async function ActionBarShell({ args }: { args: Args }) {
       base={snap.base}
       market={snap.market}
       accountBalance={snap.accountBalance}
+      initialInWatchlist={snap.userContext.inWatchlist}
     />
   );
 }

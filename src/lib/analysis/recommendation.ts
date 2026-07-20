@@ -94,12 +94,15 @@ export function computeRecommendation(
   }
 
   // 4) Strong setup. Confidence depends on volume + score magnitude.
+  // Both dimensions must contribute for "high"; neither → "low" (the old
+  // code had a dead `: "medium"` branch, so "low" could never happen and
+  // the 3-level scale was fake).
   const verdict: Verdict = isBullSide ? "ENTER_LONG" : "ENTER_SHORT";
   const extreme =
     isBullSide ? input.consensusScore >= 90 : input.consensusScore <= 10;
   const volBoost = input.volumeRatio !== null && input.volumeRatio > 1.5;
   const confidence: Confidence =
-    extreme && volBoost ? "high" : extreme || volBoost ? "medium" : "medium";
+    extreme && volBoost ? "high" : extreme || volBoost ? "medium" : "low";
 
   reasons.push(
     `Đa khung ${isBullSide ? "BULLISH" : "BEARISH"} ${input.consensusScore.toFixed(0)}/100`,
@@ -107,6 +110,11 @@ export function computeRecommendation(
   if (volBoost && input.volumeRatio !== null) {
     reasons.push(
       `Khối lượng ${input.volumeRatio.toFixed(2)}× trung bình — xác nhận momentum`,
+    );
+  } else if (input.volumeRatio !== null) {
+    // The single most-asked "why isn't this high confidence?" — say it.
+    reasons.push(
+      `Khối lượng ${input.volumeRatio.toFixed(2)}× trung bình — chưa xác nhận momentum, độ tin cậy giảm`,
     );
   }
 

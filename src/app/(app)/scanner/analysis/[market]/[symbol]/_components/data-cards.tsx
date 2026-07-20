@@ -6,7 +6,7 @@
  */
 
 import Link from "next/link";
-import { Newspaper, TrendingUp, TrendingDown, Activity, BarChart3, Layers, Crosshair, AlertTriangle } from "lucide-react";
+import { Newspaper, TrendingUp, TrendingDown, Activity, BarChart3, Layers, Crosshair, AlertTriangle, History, User } from "lucide-react";
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -26,16 +26,27 @@ type Args = readonly [
   number | undefined,
 ];
 
-export async function DataCards({ args }: { args: Args }) {
+/**
+ * Top block: hero (decision) + the user's own context + the trade plan.
+ * The AI card renders BETWEEN the two blocks at page level — it explains
+ * the plan, so it belongs next to it, not below the evidence tables.
+ */
+export async function DataCardsTop({ args }: { args: Args }) {
   const snap = await getCachedAnalysisSnapshot(...args);
-
-  // NOTE: ActionBar is rendered SEPARATELY at page level after the AI
-  // narrative, not here — otherwise it ends up sandwiched between the
-  // news card and the AI card, far from the page bottom.
   return (
     <>
       <HeroCard snap={snap} />
+      <UserContextStrip snap={snap} />
       <TradePlanCard snap={snap} />
+    </>
+  );
+}
+
+/** Evidence block: per-TF signals, volume/structure, related news. */
+export async function DataCardsEvidence({ args }: { args: Args }) {
+  const snap = await getCachedAnalysisSnapshot(...args);
+  return (
+    <>
       <div className="grid gap-4 md:grid-cols-2">
         <TechnicalCard snap={snap} />
         <SecondaryCard snap={snap} />
@@ -100,10 +111,14 @@ function HeroCard({ snap }: { snap: SnapshotShape }) {
           <div className="space-y-2">
             <div className="flex items-baseline justify-between">
               <span className="text-xs text-muted-foreground">
-                Điểm đồng thuận
+                Đồng thuận đa khung
               </span>
+              {/* Honest framing: the "score" is a binary per-TF count
+                  (only 0/25/50/75/100 exist for 4 TFs) — "4/4 khung" says
+                  what it IS instead of dressing it up as a calibrated
+                  0-100 measurement. */}
               <span className="num text-xl font-semibold tabular-nums">
-                {snap.consensus.score.toFixed(0)}/100
+                {bullBearCount(snap)}
               </span>
             </div>
             <ScoreBar value={snap.consensus.score} />
@@ -115,6 +130,78 @@ function HeroCard({ snap }: { snap: SnapshotShape }) {
           </div>
         </div>
 
+        {snap.signalAge || snap.setupHistory ? (
+          <div className="space-y-1 rounded-md border border-border/60 bg-muted/30 px-3 py-2 text-xs">
+            {snap.signalAge ? (
+              <p className="flex items-start gap-1.5">
+                <History className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
+                <span>
+                  Tín hiệu 4h giữ phía này{" "}
+                  <span className="num font-medium">
+                    {snap.signalAge.exhausted ? "≥" : ""}
+                    {fmtBarsAge(snap.signalAge.bars)}
+                  </span>{" "}
+                  · giá đã chạy{" "}
+                  <span
+                    className={cn(
+                      "num font-medium",
+                      snap.signalAge.priceChangePct > 0
+                        ? "text-bullish"
+                        : snap.signalAge.priceChangePct < 0
+                          ? "text-bearish"
+                          : "",
+                    )}
+                  >
+                    {snap.signalAge.priceChangePct >= 0 ? "+" : ""}
+                    {snap.signalAge.priceChangePct}%
+                  </span>{" "}
+                  từ khi flip
+                </span>
+              </p>
+            ) : null}
+            {snap.setupHistory && snap.setupHistory.occurrences > 0 ? (
+              <p className="flex items-start gap-1.5">
+                <BarChart3 className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
+                <span>
+                  Tín hiệu 4h như vầy:{" "}
+                  <span className="num font-medium">
+                    {snap.setupHistory.occurrences} lần/
+                    {snap.setupHistory.lookbackDays} ngày
+                  </span>{" "}
+                  · chạm TP1 trước SL{" "}
+                  <span className="num font-medium">
+                    {snap.setupHistory.tp1First}/
+                    {snap.setupHistory.tp1First + snap.setupHistory.slFirst}
+                  </span>
+                  {snap.setupHistory.medianReturn7dPct !== null ? (
+                    <>
+                      {" "}
+                      · TB{" "}
+                      <span
+                        className={cn(
+                          "num font-medium",
+                          snap.setupHistory.medianReturn7dPct > 0
+                            ? "text-bullish"
+                            : "text-bearish",
+                        )}
+                      >
+                        {snap.setupHistory.medianReturn7dPct >= 0 ? "+" : ""}
+                        {snap.setupHistory.medianReturn7dPct}%
+                      </span>{" "}
+                      sau 7 ngày
+                    </>
+                  ) : null}
+                  <span className="text-muted-foreground">
+                    {" "}
+                    (replay theo đúng luật SL/TP của kế hoạch — quá khứ không
+                    đảm bảo tương lai)
+                  </span>
+                </span>
+              </p>
+            ) : null}
+          </div>
+        ) : null}
+
         <Separator />
 
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
@@ -123,9 +210,7 @@ function HeroCard({ snap }: { snap: SnapshotShape }) {
             <span className="text-lg font-semibold">
               {verdictLabel(snap.recommendation.verdict)}
             </span>
-            <span className="text-xs text-muted-foreground">
-              ({confidenceLabel(snap.recommendation.confidence)})
-            </span>
+            <ConfidenceChip confidence={snap.recommendation.confidence} />
           </div>
           <ul className="space-y-0.5 text-xs text-muted-foreground sm:text-right">
             {snap.recommendation.reasons.map((r, i) => (
@@ -135,6 +220,96 @@ function HeroCard({ snap }: { snap: SnapshotShape }) {
         </div>
       </CardContent>
     </Card>
+  );
+}
+
+function bullBearCount(snap: SnapshotShape): string {
+  const total = snap.perTF.length;
+  const bull = snap.perTF.filter((t) => t.signal === "BULLISH").length;
+  const bear = snap.perTF.filter((t) => t.signal === "BEARISH").length;
+  if (bull >= bear) return `${bull}/${total} khung BULL`;
+  return `${bear}/${total} khung BEAR`;
+}
+
+function fmtBarsAge(bars: number): string {
+  const hours = bars * 4;
+  if (hours < 48) return `${hours} giờ`;
+  return `${Math.round(hours / 24)} ngày`;
+}
+
+function ConfidenceChip({
+  confidence,
+}: {
+  confidence: "low" | "medium" | "high";
+}) {
+  return (
+    <span
+      className={cn(
+        "rounded-full px-2 py-0.5 text-[11px] font-medium",
+        confidence === "high" && "bg-bullish/10 text-bullish",
+        confidence === "medium" && "bg-warning/10 text-warning",
+        confidence === "low" && "bg-muted text-muted-foreground",
+      )}
+    >
+      {confidenceLabel(confidence)}
+    </span>
+  );
+}
+
+// ── "Bối cảnh của bạn" — journal + watchlist relationship ────────────
+
+function UserContextStrip({ snap }: { snap: SnapshotShape }) {
+  const ctx = snap.userContext;
+  const hasAnything =
+    ctx.openTrades.length > 0 || ctx.closedCount > 0 || ctx.inWatchlist;
+  if (!hasAnything) return null;
+
+  return (
+    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 rounded-lg border bg-card px-3 py-2 text-xs">
+      <span className="flex items-center gap-1.5 font-medium">
+        <User className="size-3.5 text-muted-foreground" />
+        Bối cảnh của bạn
+      </span>
+      {ctx.openTrades.length > 0 ? (
+        <span className="font-medium text-warning">
+          ⚠ Đang mở {ctx.openTrades.length} lệnh {snap.base} (
+          {ctx.openTrades.map((t) => t.direction).join(", ")}) — vào thêm là
+          tăng gấp exposure
+        </span>
+      ) : null}
+      {ctx.closedCount > 0 ? (
+        <span className="text-muted-foreground">
+          Đã đóng {ctx.closedCount} lệnh {snap.base}
+          {ctx.totalR !== null ? (
+            <>
+              {" "}
+              · tổng{" "}
+              <span
+                className={cn(
+                  "num font-medium",
+                  ctx.totalR > 0 ? "text-bullish" : ctx.totalR < 0 ? "text-bearish" : "",
+                )}
+              >
+                {ctx.totalR > 0 ? "+" : ""}
+                {ctx.totalR}R
+              </span>
+            </>
+          ) : null}
+          {" · "}
+          <Link
+            href={`/journal?symbol=${encodeURIComponent(snap.symbol)}`}
+            className="underline hover:text-foreground"
+          >
+            xem lại
+          </Link>
+        </span>
+      ) : null}
+      {ctx.inWatchlist ? (
+        <span className="text-muted-foreground">
+          🔔 Đang theo dõi — có alert Telegram khi đạt/gãy đồng thuận
+        </span>
+      ) : null}
+    </div>
   );
 }
 
@@ -212,6 +387,10 @@ function TradePlanCard({ snap }: { snap: SnapshotShape }) {
               ATR({snap.atrTimeframe}) {plan.atrMultiple.toFixed(2)}×
               {" · "}
               SL {plan.slPct.toFixed(2)}%
+              {" · "}
+              <span title="Entry lấy theo giá thị trường tại thời điểm quét — mở lại trang để cập nhật">
+                giá lúc quét {fmtClock(snap.generatedAt)}
+              </span>
             </CardDescription>
           </div>
         </div>
@@ -239,6 +418,8 @@ function TradePlanCard({ snap }: { snap: SnapshotShape }) {
           />
         </div>
         <Separator />
+        {/* One grid, not two 3-tile rows — on mobile (2 cols) two rows
+            wrapped as 2+1 / 2+1 with awkward orphans. */}
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
           <StatTile
             label="Đòn bẩy yêu cầu"
@@ -247,20 +428,26 @@ function TradePlanCard({ snap }: { snap: SnapshotShape }) {
           />
           <StatTile
             label="Margin đề xuất"
-            value={`${plan.margin} USDT`}
-            sub={`Risk ${plan.riskAmount}`}
+            value={`${fmtUsd(plan.margin)} USDT`}
+            sub={`Risk ${fmtUsd(plan.riskAmount)} USDT`}
           />
           <StatTile
             label="Khối lượng"
-            value={`${plan.units} ${snap.base}`}
-            sub={`Notional ${plan.notional} USDT`}
+            value={`${fmtUnits(plan.units)} ${snap.base}`}
+            sub={`Notional ${fmtUsd(plan.notional)} USDT`}
           />
-        </div>
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
           <StatTile
             label="Giá thanh lý"
-            value={fmtPrice(plan.liquidationPrice)}
-            sub="approx (no fees)"
+            value={
+              plan.liquidationPrice === null
+                ? "—"
+                : fmtPrice(plan.liquidationPrice)
+            }
+            sub={
+              plan.liquidationPrice === null
+                ? "1× isolated — gần như không thể thanh lý"
+                : "ước tính, gồm ký quỹ duy trì ~0.5%"
+            }
           />
           <StatTile
             label="Phí round-trip"
@@ -268,11 +455,29 @@ function TradePlanCard({ snap }: { snap: SnapshotShape }) {
             sub={`${plan.feesPctOfR.toFixed(0)}% của R`}
           />
           <StatTile
-            label="Số dư giả định"
-            value={`${snap.accountBalance} USDT`}
-            sub={`Risk ${(snap.riskPercent * 100).toFixed(1)}%`}
+            label={
+              snap.balanceSource === "real" ? "Số dư Futures thực" : "Số dư giả định"
+            }
+            value={`${fmtUsd(snap.accountBalance)} USDT`}
+            sub={
+              snap.balanceSource === "real"
+                ? `từ sàn đã kết nối · Risk ${(snap.riskPercent * 100).toFixed(1)}%`
+                : `chưa kết nối sàn · Risk ${(snap.riskPercent * 100).toFixed(1)}%`
+            }
           />
         </div>
+        {plan.headroomR !== null && plan.firstBarrier !== null ? (
+          <p className="text-xs text-muted-foreground">
+            {plan.direction === "LONG" ? "Kháng cự" : "Hỗ trợ"} đầu tiên{" "}
+            <span className="num font-medium text-foreground">
+              {fmtPrice(plan.firstBarrier)}
+            </span>{" "}
+            = <span className="num font-medium text-foreground">+{plan.headroomR}R</span>
+            {plan.headroomR >= 2
+              ? " — TP2 (2R) nằm an toàn trước cản"
+              : " — cản nằm trước TP2, cân nhắc chốt sớm"}
+          </p>
+        ) : null}
         {plan.warnings.length > 0 ? (
           <ul className="space-y-1 rounded-md border border-warning/40 bg-warning/10 p-2.5 text-xs text-warning">
             {plan.warnings.map((w, i) => (
@@ -506,19 +711,13 @@ function classLabel(c: "high" | "low" | "normal"): string {
 
 function NewsCard({ snap }: { snap: SnapshotShape }) {
   if (snap.news.length === 0) {
+    // A whole empty card was dead weight pushing the action bar below the
+    // fold — one muted footnote carries the same information.
     return (
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-base">
-            <Newspaper className="size-4 text-primary" />
-            Tin tức liên quan
-          </CardTitle>
-          <CardDescription>
-            Chưa có tin tức gắn thẻ {snap.base}. Chạy tổng hợp tin ở trang Tin
-            tức để cải thiện ngữ cảnh.
-          </CardDescription>
-        </CardHeader>
-      </Card>
+      <p className="flex items-center gap-1.5 px-1 text-xs text-muted-foreground">
+        <Newspaper className="size-3.5" />
+        Chưa có tin tức gắn thẻ {snap.base}.
+      </p>
     );
   }
   return (
@@ -593,6 +792,31 @@ function pctClass(n: number): string {
   if (n > 0) return "text-bullish";
   if (n < 0) return "text-bearish";
   return "text-muted-foreground";
+}
+
+/** USDT amounts — grouped, 2dp. */
+function fmtUsd(n: number): string {
+  if (!Number.isFinite(n)) return "—";
+  return n.toLocaleString("en-US", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+}
+
+/** Position size — grouped, precision scaled to magnitude (3381.867794
+ *  was false precision overflowing its tile). Full precision still goes
+ *  to planToText + deep-links, which use the raw plan values. */
+function fmtUnits(n: number): string {
+  if (!Number.isFinite(n)) return "—";
+  const dp = n >= 100 ? 1 : n >= 1 ? 3 : 6;
+  return n.toLocaleString("en-US", { maximumFractionDigits: dp });
+}
+
+function fmtClock(iso: string): string {
+  const t = new Date(iso);
+  return Number.isNaN(t.getTime())
+    ? "—"
+    : t.toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit" });
 }
 
 function fmtMillions(n: number): string {
