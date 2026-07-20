@@ -17,6 +17,7 @@ import {
 } from "@/components/ui/card";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { InstrumentCombobox } from "@/components/instrument-combobox";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import {
@@ -649,17 +650,9 @@ export function TradeFormClient({
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
+            {/* Market first — it decides which instrument list the symbol
+                picker shows. */}
             <div className="grid grid-cols-2 gap-3">
-              <Field label="Symbol *">
-                <Input
-                  className="num"
-                  value={state.symbol}
-                  onChange={(e) =>
-                    update("symbol", e.target.value.toUpperCase())
-                  }
-                  placeholder="EURUSD, BTCUSDT…"
-                />
-              </Field>
               <Field label="Thị trường">
                 <Select
                   value={state.market}
@@ -679,6 +672,28 @@ export function TradeFormClient({
                     <SelectItem value="OTHER">Khác</SelectItem>
                   </SelectContent>
                 </Select>
+              </Field>
+              <Field label="Symbol *">
+                {state.market === "FOREX" || state.market === "CRYPTO" ? (
+                  <InstrumentCombobox
+                    market={state.market}
+                    value={state.symbol}
+                    onChange={(s) => update("symbol", s)}
+                    placeholder={
+                      state.market === "FOREX" ? "Chọn cặp forex…" : "Chọn coin…"
+                    }
+                  />
+                ) : (
+                  // No curated list for stocks/commodities/indices — free text.
+                  <Input
+                    className="num"
+                    value={state.symbol}
+                    onChange={(e) =>
+                      update("symbol", e.target.value.toUpperCase())
+                    }
+                    placeholder="VD: XAUUSD, VN30…"
+                  />
+                )}
               </Field>
             </div>
 
