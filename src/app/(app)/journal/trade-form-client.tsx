@@ -664,12 +664,19 @@ export function TradeFormClient({
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="FOREX">Forex</SelectItem>
+                    {/* Only markets the app actually supports (live quotes,
+                        calculator, scanner). Gold/silver live in Forex as
+                        the "Metal" group. "Khác" is the manual catch-all.
+                        Legacy value kept selectable when editing an old
+                        trade that used a removed market. */}
+                    <SelectItem value="FOREX">Forex (gồm vàng/bạc)</SelectItem>
                     <SelectItem value="CRYPTO">Crypto</SelectItem>
-                    <SelectItem value="STOCK">Stock</SelectItem>
-                    <SelectItem value="COMMODITY">Commodity</SelectItem>
-                    <SelectItem value="INDEX">Index</SelectItem>
                     <SelectItem value="OTHER">Khác</SelectItem>
+                    {["STOCK", "COMMODITY", "INDEX"].includes(state.market) ? (
+                      <SelectItem value={state.market}>
+                        {state.market} (cũ)
+                      </SelectItem>
+                    ) : null}
                   </SelectContent>
                 </Select>
               </Field>

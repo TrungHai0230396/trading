@@ -343,12 +343,10 @@ export function JournalClient() {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
+                  {/* Match the trade form: only supported markets. */}
                   <SelectItem value="ALL">Tất cả</SelectItem>
                   <SelectItem value="FOREX">Forex</SelectItem>
                   <SelectItem value="CRYPTO">Crypto</SelectItem>
-                  <SelectItem value="STOCK">Stock</SelectItem>
-                  <SelectItem value="COMMODITY">Commodity</SelectItem>
-                  <SelectItem value="INDEX">Index</SelectItem>
                   <SelectItem value="OTHER">Khác</SelectItem>
                 </SelectContent>
               </Select>
