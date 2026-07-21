@@ -70,10 +70,6 @@ export function BitgetBrokerCard() {
   const [account, setAccount] = React.useState<BitgetAccount | null>(null);
   const [accountError, setAccountError] = React.useState<string | null>(null);
   const [accountLoading, setAccountLoading] = React.useState(false);
-  const [posMode, setPosMode] = React.useState<
-    "one_way_mode" | "hedge_mode" | "unknown" | null
-  >(null);
-  const [posModeLoading, setPosModeLoading] = React.useState(false);
   const [apiKey, setApiKey] = React.useState("");
   const [secret, setSecret] = React.useState("");
   const [passphrase, setPassphrase] = React.useState("");
@@ -118,51 +114,6 @@ export function BitgetBrokerCard() {
       setAccountError(null);
     }
   }, [status?.connected, editing, refreshAccount]);
-
-  // Read current position mode (one-way vs hedge). Phase 2 only supports
-  // one-way, so when posMode === "hedge_mode" we show a "Switch" button.
-  const refreshPosMode = React.useCallback(async () => {
-    try {
-      const res = await fetch("/api/brokers/bitget/position-mode");
-      const j = await res.json();
-      if (res.ok && j?.mode) setPosMode(j.mode);
-    } catch {
-      /* swallow — non-blocking */
-    }
-  }, []);
-
-  React.useEffect(() => {
-    if (status?.connected && !editing) refreshPosMode();
-    else setPosMode(null);
-  }, [status?.connected, editing, refreshPosMode]);
-
-  const switchToOneWay = async () => {
-    if (
-      !confirm(
-        "Chuyển tài khoản Bitget Futures sang chế độ One-way?\n\n" +
-          "Yêu cầu: KHÔNG có vị thế đang mở và KHÔNG có lệnh treo. " +
-          "Bitget sẽ từ chối nếu không thoả mãn.",
-      )
-    )
-      return;
-    setPosModeLoading(true);
-    try {
-      const res = await fetch("/api/brokers/bitget/position-mode", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mode: "one_way_mode" }),
-      });
-      const j = await res.json();
-      if (!res.ok) {
-        toast.error(j?.error ?? `Lỗi ${res.status}`);
-        return;
-      }
-      toast.success("Đã chuyển sang One-way.");
-      setPosMode("one_way_mode");
-    } finally {
-      setPosModeLoading(false);
-    }
-  };
 
   const save = async () => {
     if (!apiKey || !secret || !passphrase) {
@@ -267,32 +218,6 @@ export function BitgetBrokerCard() {
               </div>
             </div>
 
-            {posMode === "hedge_mode" ? (
-              <div className="space-y-2 rounded-md border border-warning/40 bg-warning/10 p-3 text-sm">
-                <div className="flex items-start gap-2">
-                  <span className="font-medium text-warning">
-                    Tài khoản đang ở chế độ Hedge
-                  </span>
-                </div>
-                <p className="text-xs text-muted-foreground">
-                  App chỉ hỗ trợ đặt lệnh tự động ở chế độ One-way (Một chiều).
-                  Đổi sang One-way trước khi dùng tính năng &ldquo;Đặt lệnh thật
-                  trên Bitget&rdquo;. Yêu cầu: không có vị thế đang mở và không
-                  có lệnh treo.
-                </p>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={switchToOneWay}
-                  disabled={posModeLoading}
-                >
-                  {posModeLoading ? (
-                    <Loader2 className="size-3 animate-spin" />
-                  ) : null}
-                  Chuyển sang One-way
-                </Button>
-              </div>
-            ) : null}
 
             {/* Balance + positions block */}
             <div className="space-y-1.5 rounded-md border bg-card/40 p-3 text-sm">
@@ -611,7 +536,7 @@ function BitgetGuide() {
           Permissions: chỉ cần quyền <strong>ĐỌC</strong> (Futures → Orders +
           Holdings) — đủ để app tự đồng bộ lệnh khớp/đóng và PnL vào nhật
           ký. KHÔNG tick <strong>Trade/Transfer/Withdraw</strong> — app
-          mặc định không đặt lệnh hộ bạn.
+          chỉ đọc, không bao giờ đặt lệnh hộ bạn.
         </li>
         <li>
           Ô <strong>IP whitelist</strong>: để trống (không bắt buộc).
@@ -1225,7 +1150,7 @@ export function BinanceBrokerCard() {
                 <li>
                   Permissions: chỉ cần tick <strong>Enable Reading</strong> —
                   đủ để đồng bộ lệnh/PnL vào nhật ký. KHÔNG tick Enable
-                  Futures/Withdraw — app mặc định không đặt lệnh hộ bạn.
+                  Futures/Withdraw — app chỉ đọc, không bao giờ đặt lệnh.
                 </li>
                 <li>
                   IP access: chọn <strong>Unrestricted</strong> — key chỉ đọc
@@ -1303,118 +1228,7 @@ export function BinanceBrokerCard() {
 }
 
 // ────────────────────────────────────────────────────────────────────
-// Risk limits card — enforced server-side at order placement
-// ────────────────────────────────────────────────────────────────────
-
-export function RiskLimitsCard() {
-  const [maxRiskPct, setMaxRiskPct] = React.useState("");
-  const [maxOpenPositions, setMaxOpenPositions] = React.useState("");
-  const [loaded, setLoaded] = React.useState(false);
-  const [submitting, setSubmitting] = React.useState(false);
-  // These limits are enforced ONLY at real-order placement, which is
-  // entitlement-gated. Read-only accounts would be configuring a machine
-  // they can't run — hide the card entirely for them.
-  const [entitled, setEntitled] = React.useState(false);
-
-  React.useEffect(() => {
-    fetch("/api/brokers/entitlements")
-      .then((r) => r.json())
-      .then((d: { autoTrade?: boolean }) => setEntitled(d.autoTrade === true))
-      .catch(() => setEntitled(false));
-    fetch("/api/brokers/risk-limits")
-      .then((r) => r.json())
-      .then((d: { limits?: { maxRiskPct: number; maxOpenPositions: number } }) => {
-        if (d.limits) {
-          setMaxRiskPct(String(d.limits.maxRiskPct));
-          setMaxOpenPositions(String(d.limits.maxOpenPositions));
-        }
-        setLoaded(true);
-      })
-      .catch(() => setLoaded(true));
-  }, []);
-
-  const save = async () => {
-    const pct = Number(maxRiskPct.replace(",", "."));
-    const pos = Math.floor(Number(maxOpenPositions));
-    if (!Number.isFinite(pct) || pct <= 0 || pct > 100) {
-      toast.error("% rủi ro mỗi lệnh phải trong khoảng 0–100.");
-      return;
-    }
-    if (!Number.isFinite(pos) || pos < 1 || pos > 50) {
-      toast.error("Số vị thế tối đa phải từ 1 đến 50.");
-      return;
-    }
-    setSubmitting(true);
-    try {
-      const res = await fetch("/api/brokers/risk-limits", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ maxRiskPct: pct, maxOpenPositions: pos }),
-      });
-      const d = await res.json();
-      if (!res.ok) {
-        toast.error(d?.error ?? `Lỗi ${res.status}`);
-        return;
-      }
-      toast.success("Đã lưu giới hạn rủi ro.");
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  if (!entitled) return null;
-
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-base">Giới hạn rủi ro</CardTitle>
-        <CardDescription>
-          Chặn server-side tại thời điểm đặt lệnh thật — kể cả khi nhập sai
-          khối lượng, lệnh vượt giới hạn sẽ bị từ chối.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <FormField
-            label="Rủi ro tối đa mỗi lệnh (% vốn)"
-            hint="Khoảng cách entry→SL × khối lượng so với equity futures. Mặc định 5%."
-          >
-            <Input
-              inputMode="decimal"
-              className="num"
-              value={maxRiskPct}
-              onChange={(e) => setMaxRiskPct(e.target.value)}
-              placeholder="5"
-              disabled={!loaded}
-            />
-          </FormField>
-          <FormField
-            label="Số vị thế mở tối đa"
-            hint="Đếm mọi vị thế đang mở trên Bitget. Mặc định 3."
-          >
-            <Input
-              inputMode="numeric"
-              className="num"
-              value={maxOpenPositions}
-              onChange={(e) =>
-                setMaxOpenPositions(e.target.value.replace(/[^0-9]/g, ""))
-              }
-              placeholder="3"
-              disabled={!loaded}
-            />
-          </FormField>
-        </div>
-        <Button size="sm" onClick={save} disabled={submitting || !loaded}>
-          {submitting ? <Loader2 className="size-4 animate-spin" /> : null}
-          Lưu giới hạn
-        </Button>
-      </CardContent>
-    </Card>
-  );
-}
-
-// ────────────────────────────────────────────────────────────────────
-// Telegram notifications card — ONE system bot, link via deep-link
+// Telegram notify card (system bot, one-tap link)
 // ────────────────────────────────────────────────────────────────────
 
 type TgStatus = { enabled: boolean; connected: boolean };

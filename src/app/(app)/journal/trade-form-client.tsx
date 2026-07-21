@@ -47,10 +47,6 @@ import {
   makeInitialChecksFor,
   type TradingSystemCardState,
 } from "./trading-system-card";
-import {
-  AutoPlaceDialog,
-  type AutoPlacePayload,
-} from "./auto-place-dialog";
 import { Switch } from "@/components/ui/switch";
 
 // ──────────────────────────────────────────────────────────────────────
@@ -79,10 +75,6 @@ type FormState = {
   mistakes: string;
   emotion: string;
   tagNames: string;
-  // Crypto futures leverage for the auto-place broker order. Stored as
-  // string so the input can be empty mid-typing; coerced to number when
-  // we build the broker payload.
-  leverage: string;
 };
 
 type ScreenshotItem = TradeDetail["screenshots"][number];
@@ -144,7 +136,6 @@ const INITIAL: FormState = {
   mistakes: "",
   emotion: "",
   tagNames: "",
-  leverage: "10",
 };
 
 function fromTrade(t: TradeDetail): FormState {
@@ -169,9 +160,6 @@ function fromTrade(t: TradeDetail): FormState {
     mistakes: t.mistakes ?? "",
     emotion: t.emotion ?? "",
     tagNames: t.tags.map((tg) => tg.name).join(", "),
-    // Existing trades don't carry leverage in DB — keep the default so the
-    // field is still editable when the user opens the form.
-    leverage: "10",
   };
 }
 
@@ -217,14 +205,6 @@ function applyPrefillFromParams(
   if (riskAmount) next.riskAmount = riskAmount;
   const setup = params.get("setup");
   if (setup) next.setup = setup.slice(0, 2000); // schema cap
-  const leverage = params.get("leverage");
-  if (leverage) {
-    // Always floor; never round up. Lower leverage = safer.
-    const lev = Math.floor(Number(leverage));
-    if (Number.isFinite(lev) && lev >= 1 && lev <= 125) {
-      next.leverage = String(lev);
-    }
-  }
   return next;
 }
 
@@ -257,63 +237,7 @@ export function TradeFormClient({
     }),
   );
   const [pendingSubmit, setPendingSubmit] = React.useState(false);
-  // ── Auto-place toggle state ───────────────────────────────────────────
-  // Default OFF. The toggle only becomes enable-able when:
-  //   - mode === "new"
-  //   - market === "CRYPTO"
-  //   - at least one broker (Bitget/Binance) is connected
-  // After the journal save completes, we open the confirm dialog with
-  // the saved tradeJournalId — the dialog calls POST /broker/order.
-  const [autoPlaceEnabled, setAutoPlaceEnabled] = React.useState(false);
-  const [bitgetConnected, setBitgetConnected] = React.useState<boolean | null>(
-    null,
-  );
-  const [binanceConnected, setBinanceConnected] = React.useState<
-    boolean | null
-  >(null);
-  const [broker, setBroker] = React.useState<"BITGET" | "BINANCE">("BITGET");
-  // Auto-trade is a restricted feature (read-only product by default) —
-  // the server enforces this on every write route; this flag only decides
-  // whether to RENDER the auto-place card at all.
-  const [autoTradeEntitled, setAutoTradeEntitled] = React.useState(false);
-  const [autoPlacePayload, setAutoPlacePayload] =
-    React.useState<AutoPlacePayload | null>(null);
   const submitLockRef = React.useRef(false);
-  React.useEffect(() => {
-    if (mode !== "new") return;
-    let cancelled = false;
-    Promise.all([
-      fetch("/api/brokers/bitget/keys")
-        .then((r) => r.json())
-        .catch(() => null),
-      fetch("/api/brokers/binance/keys")
-        .then((r) => r.json())
-        .catch(() => null),
-      fetch("/api/brokers/entitlements")
-        .then((r) => r.json())
-        .catch(() => null),
-    ]).then(([bg, bn, ent]) => {
-      if (cancelled) return;
-      const bgOk = !!bg?.connected;
-      const bnOk = !!bn?.connected;
-      setBitgetConnected(bgOk);
-      setBinanceConnected(bnOk);
-      setAutoTradeEntitled(ent?.autoTrade === true);
-      // Default to whichever single broker is connected.
-      if (!bgOk && bnOk) setBroker("BINANCE");
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [mode]);
-  const anyBrokerConnected =
-    bitgetConnected === true || binanceConnected === true;
-  const canAutoPlace =
-    mode === "new" &&
-    state.market === "CRYPTO" &&
-    anyBrokerConnected &&
-    autoTradeEntitled;
-  const brokerName = broker === "BINANCE" ? "Binance" : "Bitget";
   const [uploadCaption, setUploadCaption] = React.useState("");
   const [uploadKind, setUploadKind] = React.useState<"" | "before" | "during" | "after">("");
   const [uploadUrl, setUploadUrl] = React.useState("");
@@ -420,31 +344,6 @@ export function TradeFormClient({
     onSuccess: (data) => {
       toast.success(mode === "new" ? "Đã tạo lệnh" : "Đã cập nhật");
       queryClient.invalidateQueries({ queryKey: ["journal"] });
-      // If auto-place is on, open the broker confirm dialog with the
-      // saved journal id. We delay router.push until the dialog closes
-      // so the user stays on the form for the broker step.
-      if (
-        mode === "new" &&
-        autoPlaceEnabled &&
-        canAutoPlace &&
-        !empty(state.entryPrice) &&
-        !empty(state.lotSize)
-      ) {
-        setAutoPlacePayload({
-          tradeJournalId: data.id,
-          broker,
-          symbol: state.symbol.trim().toUpperCase(),
-          direction: state.direction,
-          units: num(state.lotSize),
-          entryPrice: num(state.entryPrice),
-          stopLoss: empty(state.stopLoss) ? undefined : num(state.stopLoss),
-          takeProfit: empty(state.takeProfit) ? undefined : num(state.takeProfit),
-          leverage: Math.max(1, Math.min(125, Math.floor(num(state.leverage)) || 10)),
-          marginMode: "isolated",
-        });
-        // Don't navigate yet — wait for dialog close.
-        return;
-      }
       if (mode === "new") {
         router.push(`/journal/${data.id}`);
       } else {
@@ -1280,105 +1179,6 @@ export function TradeFormClient({
         </CardContent>
       </Card>
 
-      {/* Restricted feature: hidden entirely for read-only accounts. */}
-      {mode === "new" && autoTradeEntitled ? (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">
-              Đặt lệnh thật trên sàn ({brokerName})
-            </CardTitle>
-            <CardDescription>
-              Sau khi tạo lệnh trong nhật ký, tự động gửi lệnh limit sang{" "}
-              {brokerName} USDT-Futures. Lệnh có Stop Loss / Take Profit nếu
-              bạn điền ở trên.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <div className="flex items-center justify-between gap-3 rounded-md border bg-card/40 p-3">
-              <div className="space-y-1">
-                <div className="flex flex-wrap items-center gap-2">
-                  <Switch
-                    id="auto-place"
-                    checked={autoPlaceEnabled && canAutoPlace}
-                    disabled={!canAutoPlace}
-                    onCheckedChange={(v) => setAutoPlaceEnabled(!!v)}
-                  />
-                  <Label htmlFor="auto-place" className="cursor-pointer">
-                    Tự đặt lệnh trên {brokerName} khi lưu
-                  </Label>
-                  {autoPlaceEnabled && canAutoPlace ? (
-                    <Badge variant="destructive" className="text-[10px]">
-                      Lệnh thật
-                    </Badge>
-                  ) : null}
-                </div>
-                <p className="text-xs text-muted-foreground">
-                  {bitgetConnected === null && binanceConnected === null
-                    ? "Đang kiểm tra kết nối sàn…"
-                    : !anyBrokerConnected
-                      ? "Chưa kết nối sàn nào. Vào Cài đặt → Sàn giao dịch để thêm API key (Bitget hoặc Binance)."
-                      : state.market !== "CRYPTO"
-                        ? "Chỉ hỗ trợ thị trường CRYPTO trong giai đoạn này."
-                        : "Khối lượng dưới đây là số coin gốc (vd 0.001 BTC), KHÔNG phải lot forex."}
-                </p>
-              </div>
-            </div>
-
-            {canAutoPlace && bitgetConnected && binanceConnected ? (
-              <div className="grid grid-cols-[120px_1fr] items-center gap-3 rounded-md border bg-card/40 p-3">
-                <Label>Sàn giao dịch</Label>
-                <Select
-                  value={broker}
-                  onValueChange={(v) =>
-                    (v === "BITGET" || v === "BINANCE") && setBroker(v)
-                  }
-                >
-                  <SelectTrigger className="w-full">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="BITGET">Bitget Futures</SelectItem>
-                    <SelectItem value="BINANCE">Binance Futures</SelectItem>
-                  </SelectContent>
-                </Select>
-                <span className="col-span-2 text-xs text-muted-foreground">
-                  Cả 2 sàn đang kết nối — chọn nơi đặt lệnh thật cho mục này.
-                </span>
-              </div>
-            ) : null}
-
-            {canAutoPlace ? (
-              <div className="grid grid-cols-[120px_1fr] items-center gap-3 rounded-md border bg-card/40 p-3">
-                <Label htmlFor="leverage">Đòn bẩy (x)</Label>
-                <Input
-                  id="leverage"
-                  inputMode="numeric"
-                  className="num"
-                  value={state.leverage}
-                  onChange={(e) =>
-                    update(
-                      "leverage",
-                      e.target.value.replace(/[^0-9]/g, ""),
-                    )
-                  }
-                  placeholder="10"
-                />
-                <span className="col-span-2 text-xs text-muted-foreground">
-                  Gợi ý từ Calculator (an toàn — buffer 50%, làm tròn xuống) được tự điền nếu bạn
-                  đi từ trang Tính khối lượng. Cho phép 1–125x. Mặc định 10x.
-                </span>
-              </div>
-            ) : null}
-
-            {autoPlaceEnabled && canAutoPlace ? (
-              <p className="text-xs text-muted-foreground">
-                Khi nhấn “Tạo lệnh”, nhật ký được lưu trước; sau đó một hộp xác nhận
-                sẽ hiện ra với thông tin lệnh thật để bạn duyệt.
-              </p>
-            ) : null}
-          </CardContent>
-        </Card>
-      ) : null}
 
       <div className="flex items-center justify-end gap-2">
         <Button
@@ -1423,17 +1223,6 @@ export function TradeFormClient({
         }}
       />
 
-      <AutoPlaceDialog
-        open={autoPlacePayload !== null}
-        onOpenChange={(open) => {
-          if (!open) {
-            const id = autoPlacePayload?.tradeJournalId;
-            setAutoPlacePayload(null);
-            if (id) router.push(`/journal/${id}`);
-          }
-        }}
-        payload={autoPlacePayload}
-      />
     </div>
   );
 }

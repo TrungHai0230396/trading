@@ -689,7 +689,7 @@ function CreateTradeButton({
   if (lotSize > 0) params.set("lotSize", String(lotSize));
   if (result.riskAmount > 0)
     params.set("riskAmount", String(result.riskAmount));
-  // Carry the suggested leverage so the journal form + auto-place use it
+  // Carry the suggested leverage for reference in the journal note
   // instead of falling back to the hardcoded default. Use the "safe"
   // (50% buffer) value rather than rounded — rounded matches SL→liq
   // exactly which is risky if Bitget mark price wicks past SL.

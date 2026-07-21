@@ -64,12 +64,12 @@ export default function TermsPage() {
         <section>
           <h2 className="text-base font-semibold">3. Tài khoản chỉ-đọc</h2>
           <p className="mt-2">
-            Mặc định, tài khoản Vela hoạt động ở chế độ{" "}
-            <strong>chỉ-đọc</strong>: khi bạn kết nối API sàn giao dịch, ứng
-            dụng chỉ ĐỌC số dư, vị thế và lịch sử lệnh để đồng bộ nhật ký.
-            Ứng dụng không đặt, sửa hay huỷ lệnh thay bạn. Chúng tôi khuyến
-            nghị tạo API key <strong>chỉ có quyền Read</strong> và không bao
-            giờ cấp quyền Withdraw/Transfer.
+            Vela hoạt động hoàn toàn ở chế độ <strong>chỉ-đọc</strong>: khi
+            bạn kết nối API sàn giao dịch, ứng dụng chỉ ĐỌC số dư, vị thế và
+            lịch sử lệnh để đồng bộ nhật ký. Ứng dụng <strong>không có</strong>{" "}
+            chức năng đặt, sửa hay huỷ lệnh. Hãy tạo API key{" "}
+            <strong>chỉ có quyền Read</strong> và không bao giờ cấp quyền
+            Trade/Withdraw/Transfer.
           </p>
         </section>
 

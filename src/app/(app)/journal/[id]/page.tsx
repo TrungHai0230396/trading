@@ -4,7 +4,6 @@ import { auth } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { PageHeader } from "@/components/page-header";
 import { TradeFormClient } from "../trade-form-client";
-import { BrokerOrderPanel } from "../broker-order-panel";
 import { serializeTrade } from "@/lib/journal/serialize";
 import type { TradeDetail } from "@/lib/journal/types";
 
@@ -73,7 +72,6 @@ export default async function EditTradePage({
           (Next 16). Edit mode ignores the params, but the hook still
           runs unconditionally. */}
       <div className="space-y-4">
-        <BrokerOrderPanel tradeJournalId={detail.id} />
         <Suspense fallback={null}>
           <TradeFormClient mode="edit" trade={detail} />
         </Suspense>
