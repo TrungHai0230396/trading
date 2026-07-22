@@ -9,9 +9,6 @@
  *
  * Timeframe convention follows Binance: lowercase `m` is minutes, lowercase
  * `h`/`d`/`w` are hours/days/weeks, capital `M` is months (so "15m" ≠ "1M").
- *
- * Twelve Data has no native 3-day interval, so we synthesize it from daily
- * closes by taking every third bar (close-of-3-days = the third 1d close).
  */
 
 import { findForexPair, tdSymbol } from "@/lib/calc/forex-pairs";
@@ -27,9 +24,9 @@ const TD_PER_MINUTE = 7;
 const TD_PER_DAY = 700;
 
 export type Market = "FOREX" | "CRYPTO";
-export type Timeframe = "15m" | "1h" | "4h" | "1d" | "3d" | "1w" | "1M";
+export type Timeframe = "15m" | "1h" | "4h" | "1d" | "1w" | "1M";
 
-const TIMEFRAMES: Timeframe[] = ["15m", "1h", "4h", "1d", "3d", "1w", "1M"];
+const TIMEFRAMES: Timeframe[] = ["15m", "1h", "4h", "1d", "1w", "1M"];
 
 export function isTimeframe(s: string): s is Timeframe {
   return (TIMEFRAMES as string[]).includes(s);
@@ -42,7 +39,6 @@ export const TIMEFRAME_LABELS: Record<Timeframe, string> = {
   "1h": "1 giờ",
   "4h": "4 giờ",
   "1d": "1 ngày",
-  "3d": "3 ngày",
   "1w": "1 tuần",
   "1M": "1 tháng",
 };
@@ -59,18 +55,15 @@ const BINANCE_INTERVAL: Record<Timeframe, string> = {
   "1h": "1h",
   "4h": "4h",
   "1d": "1d",
-  "3d": "3d",
   "1w": "1w",
   "1M": "1M",
 };
 
-/** Twelve Data interval. `null` means we have to synthesize via aggregation. */
-const TWELVEDATA_INTERVAL: Record<Timeframe, string | null> = {
+const TWELVEDATA_INTERVAL: Record<Timeframe, string> = {
   "15m": "15min",
   "1h": "1h",
   "4h": "4h",
   "1d": "1day",
-  "3d": null, // Twelve Data has no 3day; we aggregate from 1day.
   "1w": "1week",
   "1M": "1month",
 };
@@ -151,23 +144,6 @@ function twelveDataKey(): string {
   return key;
 }
 
-/**
- * Synthesize an N-bar timeframe from a finer timeframe by taking the
- * close of every Nth bar. Returns the most recent `limit` synthesized
- * bars in oldest-first order.
- */
-function aggregateEveryN(closes: number[], factor: number, limit: number): number[] {
-  if (factor <= 1) return closes.slice(-limit);
-  const out: number[] = [];
-  // closes is oldest-first; take the close at the END of each window of size `factor`.
-  // Anchor at the latest bar so the most-recent bar always shows the latest close.
-  const startOffset = (closes.length - 1) % factor;
-  for (let i = startOffset; i < closes.length; i += factor) {
-    out.push(closes[i]);
-  }
-  return out.slice(-limit);
-}
-
 async function getTwelveDataCloses(
   symbol: string,
   timeframe: Timeframe,
@@ -176,19 +152,6 @@ async function getTwelveDataCloses(
   const pair = findForexPair(symbol);
   const tdSym = pair ? pair.display : tdSymbol(symbol);
   const tdInterval = TWELVEDATA_INTERVAL[timeframe];
-
-  // 3-day FX: pull 3× as many 1day bars and aggregate.
-  if (tdInterval === null) {
-    if (timeframe === "3d") {
-      const dailyLimit = Math.min(1000, limit * 3 + 5);
-      const dailyCloses = await fetchTwelveDataCloses(tdSym, "1day", dailyLimit);
-      return aggregateEveryN(dailyCloses, 3, limit);
-    }
-    throw new CandleFetchError(
-      `Khung ${timeframe} chưa hỗ trợ cho forex.`,
-    );
-  }
-
   return fetchTwelveDataCloses(tdSym, tdInterval, limit);
 }
 

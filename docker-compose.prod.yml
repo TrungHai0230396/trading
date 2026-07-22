@@ -1,0 +1,36 @@
+# Production overlay — adds a Caddy TLS front end in front of the app.
+#
+# Run on the VPS with BOTH files:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+#
+# The app + mysql stay loopback-only (from docker-compose.yml); Caddy reaches
+# the app over the internal compose network at app:3000 and is the ONLY thing
+# published to the internet (80/443).
+#
+# Prereq: a Cloudflare Origin cert in ./docker/cf-origin/{origin.pem,origin.key}
+# and Cloudflare SSL mode = Full (strict). See DEPLOY.md.
+
+services:
+  caddy:
+    image: caddy:2
+    container_name: tranding-caddy
+    restart: unless-stopped
+    depends_on:
+      - app
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./docker/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./docker/cf-origin:/etc/caddy/cf:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  caddy-data:
+  caddy-config:

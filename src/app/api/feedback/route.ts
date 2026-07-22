@@ -72,7 +72,7 @@ export async function POST(req: Request) {
 
   // Fire-and-forget owner ping — never blocks or fails the user's submit.
   void notifyOwner(
-    `${TYPE_LABEL[type]} — phản hồi mới trên Vela\n` +
+    `${TYPE_LABEL[type]} — phản hồi mới trên Nhật Ký Trade\n` +
       `Từ: ${email ?? "?"}\n` +
       (context ? `Trang: ${context}\n` : "") +
       `\n${message.slice(0, 1500)}`,

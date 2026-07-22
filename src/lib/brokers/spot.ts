@@ -29,6 +29,12 @@ import {
   BinanceError,
   type BinanceCreds,
 } from "@/lib/brokers/binance";
+import {
+  getSpotBalances as getMexcSpotBalances,
+  getAccountBalance as getMexcFuturesBalance,
+  MexcError,
+  type MexcCreds,
+} from "@/lib/brokers/mexc";
 
 export type SpotHolding = {
   coin: string;
@@ -37,7 +43,7 @@ export type SpotHolding = {
 };
 
 export type BrokerSpot = {
-  broker: "BITGET" | "BINANCE";
+  broker: "BITGET" | "BINANCE" | "MEXC";
   /** Sum over ALL priced holdings ≥ $1 (listed + otherUsd bucket). */
   totalUsd: number;
   /** Priced holdings ≥ $1, sorted by value desc, capped at 10. */
@@ -63,7 +69,7 @@ export type FuturesSnapshot = {
 };
 
 export type BrokerPortfolio = {
-  broker: "BITGET" | "BINANCE";
+  broker: "BITGET" | "BINANCE" | "MEXC";
   spot: BrokerSpot;
   futures: FuturesSnapshot;
 };
@@ -126,6 +132,26 @@ async function binanceTickerMap(): Promise<Map<string, number>> {
     for (const r of rows) {
       const p = Number(r.price);
       if (Number.isFinite(p) && p > 0) map.set(r.symbol, p);
+    }
+    return map;
+  });
+}
+
+async function mexcTickerMap(): Promise<Map<string, number>> {
+  return cachedTickers("mexc", async () => {
+    // MEXC spot ticker is a Binance clone: [{symbol,price}], no key needed.
+    const res = await fetch("https://api.mexc.com/api/v3/ticker/price", {
+      signal: AbortSignal.timeout(10_000),
+      cache: "no-store",
+    });
+    if (!res.ok) {
+      throw new Error(`Không lấy được bảng giá MEXC (HTTP ${res.status}).`);
+    }
+    const rows = (await res.json()) as Array<{ symbol: string; price: string }>;
+    const map = new Map<string, number>();
+    for (const r of rows) {
+      const p = Number(r.price);
+      if (Number.isFinite(p) && p > 0) map.set(r.symbol.toUpperCase(), p);
     }
     return map;
   });
@@ -292,6 +318,27 @@ async function fetchBinanceSpot(creds: BinanceCreds): Promise<BrokerSpot> {
   }
 }
 
+async function fetchMexcSpot(creds: MexcCreds): Promise<BrokerSpot> {
+  try {
+    const [rows, tickers] = await Promise.all([
+      getMexcSpotBalances(creds),
+      mexcTickerMap(),
+    ]);
+    return {
+      broker: "MEXC",
+      ...valueHoldings(
+        rows.map((r) => ({ coin: r.asset, total: r.total })),
+        tickers,
+      ),
+    };
+  } catch (e) {
+    if (e instanceof MexcError) {
+      return emptyBroker("MEXC", e.toVietnamese());
+    }
+    return emptyBroker("MEXC", errorText(e, "MEXC"));
+  }
+}
+
 // ─── Futures side ───────────────────────────────────────────────────────
 
 async function fetchBitgetFutures(
@@ -332,6 +379,26 @@ async function fetchBinanceFutures(
   }
 }
 
+async function fetchMexcFutures(creds: MexcCreds): Promise<FuturesSnapshot> {
+  try {
+    const b = await getMexcFuturesBalance(creds);
+    return {
+      equity: b.equity,
+      available: b.available,
+      unrealizedPnl: b.unrealizedPnl,
+    };
+  } catch (e) {
+    // Spot-only keys (no Futures permission / not KYC'd) land here — the
+    // money total stays correct from spot; this section just notes why the
+    // futures wallet is absent.
+    const error =
+      e instanceof MexcError
+        ? `${e.toVietnamese()} (Nếu bạn không dùng Futures MEXC thì bỏ qua thẻ này.)`
+        : errorText(e, "MEXC");
+    return { equity: 0, available: 0, unrealizedPnl: 0, error };
+  }
+}
+
 // ─── Entry point ────────────────────────────────────────────────────────
 
 /**
@@ -353,9 +420,10 @@ export async function getPortfolio(userId: string): Promise<Portfolio> {
   if (pending) return pending;
 
   const job = (async () => {
-    const [bitgetCreds, binanceCreds] = await Promise.all([
+    const [bitgetCreds, binanceCreds, mexcCreds] = await Promise.all([
       loadCreds<BitgetCreds>(userId, "BITGET"),
       loadCreds<BinanceCreds>(userId, "BINANCE"),
+      loadCreds<MexcCreds>(userId, "MEXC"),
     ]);
 
     const jobs: Promise<BrokerPortfolio>[] = [];
@@ -373,6 +441,14 @@ export async function getPortfolio(userId: string): Promise<Portfolio> {
           fetchBinanceSpot(binanceCreds),
           fetchBinanceFutures(binanceCreds),
         ]).then(([spot, futures]) => ({ broker: "BINANCE" as const, spot, futures })),
+      );
+    }
+    if (mexcCreds) {
+      jobs.push(
+        Promise.all([
+          fetchMexcSpot(mexcCreds),
+          fetchMexcFutures(mexcCreds),
+        ]).then(([spot, futures]) => ({ broker: "MEXC" as const, spot, futures })),
       );
     }
 

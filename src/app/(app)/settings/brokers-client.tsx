@@ -10,7 +10,9 @@ import {
   PlugZap,
   Trash2,
   CircleCheck,
+  ExternalLink,
 } from "lucide-react";
+import { EXCHANGE_LINKS, type Exchange } from "@/lib/brokers/referrals";
 
 import {
   Card,
@@ -31,6 +33,28 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+
+/**
+ * "Mở tài khoản [sàn]" CTA for users without an account yet — points at the
+ * owner's referral link (see lib/brokers/referrals.ts). Shown in the
+ * not-yet-connected state of each broker card.
+ */
+function RegisterCta({ exchange, label }: { exchange: Exchange; label: string }) {
+  return (
+    <a
+      href={EXCHANGE_LINKS[exchange].register}
+      target="_blank"
+      rel="noreferrer"
+      className="flex items-center justify-between gap-2 rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-xs transition-colors hover:bg-primary/10"
+    >
+      <span className="text-muted-foreground">
+        Chưa có tài khoản {label}?{" "}
+        <strong className="text-primary">Mở tài khoản</strong>
+      </span>
+      <ExternalLink className="size-3.5 shrink-0 text-primary" />
+    </a>
+  );
+}
 
 // ────────────────────────────────────────────────────────────────────
 // Bitget card
@@ -179,8 +203,8 @@ export function BitgetBrokerCard() {
               Bitget Futures
             </CardTitle>
             <CardDescription>
-              USDT-M futures. Đọc số dư + vị thế và tự đồng bộ lệnh
-              khớp/đóng vào Nhật ký giao dịch — chỉ cần quyền đọc.
+              USDT-M futures. Đọc số dư + vị thế (chỉ đọc) cho Tổng tài
+              sản; bấm “Đồng bộ sàn” ở Nhật ký để nhập vị thế đang mở.
             </CardDescription>
           </div>
           {status?.connected ? (
@@ -339,6 +363,7 @@ export function BitgetBrokerCard() {
           </div>
         ) : (
           <>
+            <RegisterCta exchange="BITGET" label="Bitget" />
             <BitgetGuide />
             <Separator />
             <div className="space-y-3">
@@ -428,7 +453,11 @@ type SpotMini = {
  * hub shows, served from the portfolio endpoint's 60s cache (no extra
  * exchange calls). Read-only.
  */
-function SpotMiniBlock({ broker }: { broker: "BITGET" | "BINANCE" }) {
+function SpotMiniBlock({
+  broker,
+}: {
+  broker: "BITGET" | "BINANCE" | "MEXC";
+}) {
   // undefined = loading, null = not available (request failed)
   const [spot, setSpot] = React.useState<SpotMini | null | undefined>(
     undefined,
@@ -516,7 +545,7 @@ function BitgetGuide() {
         <li>
           Vào{" "}
           <a
-            href="https://www.bitget.com/account/newapi"
+            href={EXCHANGE_LINKS.BITGET.apiKey}
             target="_blank"
             rel="noreferrer"
             className="text-primary hover:underline"
@@ -534,7 +563,7 @@ function BitgetGuide() {
         </li>
         <li>
           Permissions: chỉ cần quyền <strong>ĐỌC</strong> (Futures → Orders +
-          Holdings) — đủ để app tự đồng bộ lệnh khớp/đóng và PnL vào nhật
+          Holdings) — đủ để app đọc số dư/vị thế và nhập vị thế đang mở vào nhật
           ký. KHÔNG tick <strong>Trade/Transfer/Withdraw</strong> — app
           chỉ đọc, không bao giờ đặt lệnh hộ bạn.
         </li>
@@ -995,8 +1024,8 @@ export function BinanceBrokerCard() {
               Binance Futures
             </CardTitle>
             <CardDescription>
-              USDT-M futures. Đọc số dư + vị thế và tự đồng bộ lệnh
-              khớp/đóng vào Nhật ký giao dịch — chỉ cần quyền đọc.
+              USDT-M futures. Đọc số dư + vị thế (chỉ đọc) cho Tổng tài
+              sản; bấm “Đồng bộ sàn” ở Nhật ký để nhập vị thế đang mở.
             </CardDescription>
           </div>
           {status?.connected ? (
@@ -1130,6 +1159,7 @@ export function BinanceBrokerCard() {
           </div>
         ) : (
           <>
+            <RegisterCta exchange="BINANCE" label="Binance" />
             <details className="rounded-md border bg-card/40 px-3 py-2 text-xs">
               <summary className="cursor-pointer font-medium">
                 Cách lấy API key Binance
@@ -1138,7 +1168,7 @@ export function BinanceBrokerCard() {
                 <li>
                   Vào{" "}
                   <a
-                    href="https://www.binance.com/en/my/settings/api-management"
+                    href={EXCHANGE_LINKS.BINANCE.apiKey}
                     target="_blank"
                     rel="noreferrer"
                     className="text-primary hover:underline"
@@ -1149,7 +1179,7 @@ export function BinanceBrokerCard() {
                 </li>
                 <li>
                   Permissions: chỉ cần tick <strong>Enable Reading</strong> —
-                  đủ để đồng bộ lệnh/PnL vào nhật ký. KHÔNG tick Enable
+                  đủ để đọc số dư/vị thế và nhập vị thế vào nhật ký. KHÔNG tick Enable
                   Futures/Withdraw — app chỉ đọc, không bao giờ đặt lệnh.
                 </li>
                 <li>
@@ -1182,6 +1212,352 @@ export function BinanceBrokerCard() {
                     value={secret}
                     onChange={(e) => setSecret(e.target.value)}
                     placeholder="64 ký tự — chỉ hiện 1 lần khi tạo"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowSecret((v) => !v)}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                    aria-label={showSecret ? "Ẩn secret" : "Hiện secret"}
+                  >
+                    {showSecret ? (
+                      <EyeOff className="size-4" />
+                    ) : (
+                      <Eye className="size-4" />
+                    )}
+                  </button>
+                </div>
+              </FormField>
+            </div>
+            <div className="flex gap-2">
+              <Button onClick={save} disabled={submitting}>
+                {submitting ? (
+                  <Loader2 className="size-4 animate-spin" />
+                ) : (
+                  <Plug className="size-4" />
+                )}
+                Kết nối & lưu
+              </Button>
+              {editing ? (
+                <Button
+                  variant="ghost"
+                  onClick={() => {
+                    setEditing(false);
+                    setApiKey("");
+                    setSecret("");
+                  }}
+                >
+                  Huỷ
+                </Button>
+              ) : null}
+            </div>
+          </>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+// ────────────────────────────────────────────────────────────────────
+// MEXC card — Spot (always) + Futures (optional, needs Futures-enabled key)
+// ────────────────────────────────────────────────────────────────────
+
+type MexcStatus = {
+  connected: boolean;
+  meta: {
+    apiKeyMasked?: string;
+    savedAt?: string;
+  } | null;
+};
+
+export function MexcBrokerCard() {
+  const [status, setStatus] = React.useState<MexcStatus | null>(null);
+  const [account, setAccount] = React.useState<BitgetAccount | null>(null);
+  const [accountError, setAccountError] = React.useState<string | null>(null);
+  const [accountLoading, setAccountLoading] = React.useState(false);
+  const [apiKey, setApiKey] = React.useState("");
+  const [secret, setSecret] = React.useState("");
+  const [showSecret, setShowSecret] = React.useState(false);
+  const [submitting, setSubmitting] = React.useState(false);
+  const [editing, setEditing] = React.useState(false);
+
+  React.useEffect(() => {
+    fetch("/api/brokers/mexc/keys")
+      .then((r) => r.json())
+      .then((d: MexcStatus) => setStatus(d))
+      .catch(() => setStatus({ connected: false, meta: null }));
+  }, []);
+
+  const refreshAccount = React.useCallback(async () => {
+    setAccountLoading(true);
+    setAccountError(null);
+    try {
+      const res = await fetch("/api/brokers/mexc/account");
+      const j = await res.json();
+      if (!res.ok) {
+        setAccountError(j?.error ?? `Lỗi ${res.status}`);
+        setAccount(null);
+        return;
+      }
+      setAccount(j as BitgetAccount);
+    } catch (e) {
+      setAccountError(e instanceof Error ? e.message : "Lỗi không xác định");
+    } finally {
+      setAccountLoading(false);
+    }
+  }, []);
+
+  React.useEffect(() => {
+    if (status?.connected && !editing) refreshAccount();
+    else {
+      setAccount(null);
+      setAccountError(null);
+    }
+  }, [status?.connected, editing, refreshAccount]);
+
+  const save = async () => {
+    if (!apiKey || !secret) {
+      toast.error("Cần nhập đủ API key và Secret.");
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const res = await fetch("/api/brokers/mexc/keys", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ apiKey, secret }),
+      });
+      const d = (await res.json()) as { ok?: boolean; error?: string };
+      if (!res.ok || !d.ok) {
+        toast.error(d.error ?? `Lỗi ${res.status}`);
+        return;
+      }
+      toast.success("Đã kết nối MEXC.");
+      setApiKey("");
+      setSecret("");
+      setEditing(false);
+      const next = await fetch("/api/brokers/mexc/keys").then((r) => r.json());
+      setStatus(next as MexcStatus);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const disconnect = async () => {
+    if (!confirm("Gỡ kết nối MEXC khỏi app này?")) return;
+    setSubmitting(true);
+    try {
+      const res = await fetch("/api/brokers/mexc/keys", { method: "DELETE" });
+      if (!res.ok) {
+        toast.error("Không gỡ được kết nối.");
+        return;
+      }
+      toast.success("Đã gỡ kết nối MEXC.");
+      setStatus({ connected: false, meta: null });
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex items-start justify-between gap-2">
+          <div>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <PlugZap className="size-4 text-primary" />
+              MEXC
+            </CardTitle>
+            <CardDescription>
+              Đọc ví Spot (chỉ đọc). Nếu key có quyền Futures (cần KYC) thì đọc
+              thêm ví + vị thế Futures. App không bao giờ đặt lệnh.
+            </CardDescription>
+          </div>
+          {status?.connected ? (
+            <Badge
+              variant="outline"
+              className="border-bullish/40 bg-bullish/10 text-bullish"
+            >
+              <CircleCheck className="size-3" />
+              Đã kết nối
+            </Badge>
+          ) : null}
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {status?.connected && !editing ? (
+          <div className="space-y-3">
+            <div className="space-y-1.5 rounded-md border bg-card/40 p-3 text-sm">
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">API key</span>
+                <span className="font-mono text-xs">
+                  {status.meta?.apiKeyMasked ?? "—"}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Lưu lúc</span>
+                <span className="text-xs">
+                  {status.meta?.savedAt
+                    ? new Date(status.meta.savedAt).toLocaleString("vi-VN")
+                    : "—"}
+                </span>
+              </div>
+            </div>
+
+            {/* Spot is the guaranteed capability — show it first. */}
+            <SpotMiniBlock broker="MEXC" />
+
+            {/* Futures is optional (needs a Futures-enabled key). A spot-only
+                key errors here — render it softly, not as an alarm. */}
+            <div className="space-y-1.5 rounded-md border bg-card/40 p-3 text-sm">
+              <div className="flex items-center justify-between">
+                <span className="font-medium">Số dư Futures</span>
+                <Button
+                  variant="ghost"
+                  size="xs"
+                  onClick={refreshAccount}
+                  disabled={accountLoading}
+                >
+                  {accountLoading ? (
+                    <Loader2 className="size-3 animate-spin" />
+                  ) : (
+                    "Làm mới"
+                  )}
+                </Button>
+              </div>
+              {accountError ? (
+                <p className="text-xs text-muted-foreground">
+                  Chưa đọc được Futures — bỏ qua nếu bạn chỉ dùng Spot. ({accountError})
+                </p>
+              ) : account ? (
+                <>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Khả dụng</span>
+                    <span className="font-mono">
+                      {fmtNum(account.balance.available)} USDT
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Equity</span>
+                    <span className="font-mono">
+                      {fmtNum(account.balance.equity)} USDT
+                    </span>
+                  </div>
+                  {account.positions.length > 0 ? (
+                    <div className="mt-2 border-t pt-2">
+                      <p className="mb-1 text-xs text-muted-foreground">
+                        Vị thế đang mở ({account.positions.length})
+                      </p>
+                      <ul className="space-y-1">
+                        {account.positions.map((p) => (
+                          <li
+                            key={`${p.symbol}-${p.side}`}
+                            className="flex justify-between text-xs"
+                          >
+                            <span className="font-mono">
+                              {p.symbol}{" "}
+                              <Badge
+                                variant={p.side === "long" ? "default" : "destructive"}
+                                className="ml-1 text-[10px]"
+                              >
+                                {p.side.toUpperCase()} {p.leverage ?? "?"}x
+                              </Badge>
+                            </span>
+                            <span
+                              className={`font-mono ${
+                                (p.unrealizedPnl ?? 0) > 0
+                                  ? "text-bullish"
+                                  : (p.unrealizedPnl ?? 0) < 0
+                                    ? "text-bearish"
+                                    : ""
+                              }`}
+                            >
+                              {(p.unrealizedPnl ?? 0) >= 0 ? "+" : ""}
+                              {fmtNum(p.unrealizedPnl)}
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  ) : (
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      Chưa có vị thế nào đang mở.
+                    </p>
+                  )}
+                </>
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  {accountLoading ? "Đang tải…" : "—"}
+                </p>
+              )}
+            </div>
+
+            <div className="flex gap-2">
+              <Button variant="outline" size="sm" onClick={() => setEditing(true)}>
+                Đổi key
+              </Button>
+              <Button
+                variant="destructive"
+                size="sm"
+                onClick={disconnect}
+                disabled={submitting}
+              >
+                <Trash2 className="size-4" />
+                Gỡ kết nối
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <>
+            <RegisterCta exchange="MEXC" label="MEXC" />
+            <details className="rounded-md border bg-card/40 px-3 py-2 text-xs">
+              <summary className="cursor-pointer font-medium">
+                Cách lấy API key MEXC
+              </summary>
+              <ol className="ml-4 mt-2 list-decimal space-y-1 text-muted-foreground">
+                <li>
+                  Vào{" "}
+                  <a
+                    href={EXCHANGE_LINKS.MEXC.apiKey}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-primary hover:underline"
+                  >
+                    MEXC API Management
+                  </a>{" "}
+                  → Create API.
+                </li>
+                <li>
+                  Permissions: tick <strong>Read</strong> phần{" "}
+                  <strong>Spot</strong> (và <strong>Futures</strong> nếu muốn
+                  xem ví Futures). KHÔNG tick Trade/Withdraw — app chỉ đọc.
+                </li>
+                <li>
+                  IP access: để <strong>trống / Unrestricted</strong> — key chỉ
+                  đọc không cần whitelist IP.
+                </li>
+                <li>
+                  Copy <strong>Access Key</strong> + <strong>Secret Key</strong>{" "}
+                  (secret chỉ hiện 1 lần).
+                </li>
+              </ol>
+            </details>
+            <div className="space-y-3">
+              <FormField label="API Key">
+                <Input
+                  autoComplete="off"
+                  value={apiKey}
+                  onChange={(e) => setApiKey(e.target.value)}
+                  placeholder="Access Key từ MEXC"
+                />
+              </FormField>
+              <FormField label="Secret Key">
+                <div className="relative">
+                  <Input
+                    autoComplete="off"
+                    type={showSecret ? "text" : "password"}
+                    value={secret}
+                    onChange={(e) => setSecret(e.target.value)}
+                    placeholder="Secret Key — chỉ hiện 1 lần khi tạo"
                   />
                   <button
                     type="button"
@@ -1322,9 +1698,9 @@ export function TelegramNotifyCard() {
               Thông báo Telegram
             </CardTitle>
             <CardDescription>
-              Nhận tin khi lệnh khớp / đóng / huỷ, và tín hiệu đồng thuận từ
-              watchlist. Chọn khung &amp; hướng báo ở trang Quét đa khung →
-              panel Watchlist.
+              Nhận cảnh báo <strong>tín hiệu đồng thuận</strong> cho các coin
+              trong watchlist của bạn — bấm Start một lần là xong. Chọn coin,
+              khung &amp; hướng báo ở trang Quét đa khung → panel Watchlist.
             </CardDescription>
           </div>
           {status?.connected ? (
@@ -1348,7 +1724,7 @@ export function TelegramNotifyCard() {
         ) : status.connected ? (
           <div className="flex flex-wrap items-center gap-2">
             <p className="flex-1 text-sm text-muted-foreground">
-              Bạn đang nhận thông báo qua bot Vela. Muốn dừng thì gõ{" "}
+              Bạn đang nhận thông báo qua bot Nhật Ký Trade. Muốn dừng thì gõ{" "}
               <code className="rounded bg-muted px-1">/stop</code> trong
               Telegram, hoặc:
             </p>
@@ -1361,7 +1737,7 @@ export function TelegramNotifyCard() {
           <div className="space-y-3">
             <p className="text-sm text-muted-foreground">
               Bấm nút bên dưới → Telegram mở ra → bấm{" "}
-              <strong>Start</strong> là xong. Không cần tạo bot hay nhập gì cả.
+              <strong>Start</strong> là xong.
             </p>
             <Button onClick={connect} disabled={connecting}>
               {connecting ? (

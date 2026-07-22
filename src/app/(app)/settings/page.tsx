@@ -13,6 +13,7 @@ import {
   BitgetBrokerCard,
   ChangePasswordCard,
   MetaApiBrokerCard,
+  MexcBrokerCard,
   TelegramNotifyCard,
 } from "./brokers-client";
 
@@ -36,6 +37,7 @@ export default async function SettingsPage() {
         <TabsContent value="brokers" className="mt-4 space-y-4">
           <BitgetBrokerCard />
           <BinanceBrokerCard />
+          <MexcBrokerCard />
           <TelegramNotifyCard />
           <MetaApiBrokerCard />
         </TabsContent>

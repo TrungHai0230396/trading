@@ -35,17 +35,15 @@ const BINANCE_INTERVAL: Record<Timeframe, string> = {
   "1h": "1h",
   "4h": "4h",
   "1d": "1d",
-  "3d": "3d",
   "1w": "1w",
   "1M": "1M",
 };
 
-const TWELVEDATA_INTERVAL: Record<Timeframe, string | null> = {
+const TWELVEDATA_INTERVAL: Record<Timeframe, string> = {
   "15m": "15min",
   "1h": "1h",
   "4h": "4h",
   "1d": "1day",
-  "3d": null,
   "1w": "1week",
   "1M": "1month",
 };
@@ -127,11 +125,6 @@ async function getTwelveDataOHLCV(
   const pair = findForexPair(symbol);
   const tdSym = pair ? pair.display : tdSymbol(symbol);
   const tdInterval = TWELVEDATA_INTERVAL[timeframe];
-  if (tdInterval === null) {
-    throw new CandleFetchError(
-      `Khung ${timeframe} chưa hỗ trợ cho forex.`,
-    );
-  }
 
   const apiKey = process.env.TWELVE_DATA_API_KEY;
   if (!apiKey) {

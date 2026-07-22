@@ -45,3 +45,7 @@ next-env.d.ts
 
 # Local DB backups (never commit dumps)
 /backups/
+
+# Cloudflare origin cert + private key (secrets — created on the VPS)
+/docker/cf-origin/
+*.key

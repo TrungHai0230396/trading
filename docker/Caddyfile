@@ -1,0 +1,22 @@
+# TLS front end for production. Terminates HTTPS on 443 and reverse-proxies to
+# the app container over the compose network (app:3000).
+#
+# Uses a Cloudflare ORIGIN certificate (Dashboard → SSL/TLS → Origin Server →
+# Create Certificate) so it works with Cloudflare SSL mode "Full (strict)"
+# without any ACME/port-80 dependency. Save the cert as:
+#   docker/cf-origin/origin.pem   (certificate)
+#   docker/cf-origin/origin.key   (private key)
+#
+# Cloudflare sits in front, so the REAL client IP arrives in Cf-Connecting-Ip.
+# We overwrite X-Forwarded-For with it (SET, not append) so the app's per-IP
+# logic sees the genuine client and a client-supplied XFF can't spoof it.
+
+nhatkytrade.com {
+	tls /etc/caddy/cf/origin.pem /etc/caddy/cf/origin.key
+	encode zstd gzip
+
+	reverse_proxy app:3000 {
+		header_up X-Forwarded-For {http.request.header.Cf-Connecting-Ip}
+		header_up X-Real-IP {http.request.header.Cf-Connecting-Ip}
+	}
+}

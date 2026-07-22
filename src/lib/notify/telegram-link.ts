@@ -6,37 +6,47 @@
  * receives "/start <code>" (see telegram-poll.ts); we look the code up here,
  * bind that Telegram chat to the user, and burn the code.
  *
- * In-memory + single-container (same design as the rate limiter / crons).
- * Codes are short-lived (10 min) so a process restart losing them is
- * harmless — the user just clicks "Kết nối" again.
+ * Stored in the DB (AppSetting rows keyed `tglink:<code>`), NOT in memory:
+ * an in-memory map is wiped on every process restart/redeploy, which silently
+ * invalidated every pending link and produced a stream of "liên kết hết hạn"
+ * errors. DB-backed codes survive restarts. Each fresh "Kết nối" click clears
+ * the user's older pending codes, so only the newest deep link is ever valid.
  */
 
 import "server-only";
 import crypto from "node:crypto";
+import { db } from "@/lib/db";
 
-type Pending = { userId: string; expiresAt: number };
+const TTL_MS = 30 * 60_000;
+const PREFIX = "tglink:";
 
-const TTL_MS = 10 * 60_000;
-const codes = new Map<string, Pending>();
-
-export function createLinkCode(userId: string): string {
-  // URL-safe, no ambiguous chars needed — it only travels inside a t.me link.
+export async function createLinkCode(userId: string): Promise<string> {
+  // Drop this user's older pending codes so stale deep links stop working.
+  await db.appSetting.deleteMany({
+    where: { userId, key: { startsWith: PREFIX } },
+  });
   const code = crypto.randomBytes(12).toString("base64url");
-  codes.set(code, { userId, expiresAt: Date.now() + TTL_MS });
-
-  // Opportunistic sweep so abandoned codes don't accumulate.
-  if (codes.size > 5_000) {
-    const now = Date.now();
-    for (const [k, v] of codes) if (v.expiresAt < now) codes.delete(k);
-  }
+  await db.appSetting.create({
+    data: {
+      userId,
+      key: `${PREFIX}${code}`,
+      value: { expiresAt: Date.now() + TTL_MS },
+    },
+  });
   return code;
 }
 
 /** Returns the userId and burns the code, or null if invalid/expired. */
-export function consumeLinkCode(code: string): string | null {
-  const p = codes.get(code);
-  if (!p) return null;
-  codes.delete(code);
-  if (p.expiresAt < Date.now()) return null;
-  return p.userId;
+export async function consumeLinkCode(code: string): Promise<string | null> {
+  if (!code) return null;
+  const row = await db.appSetting.findFirst({
+    where: { key: `${PREFIX}${code}` },
+    select: { id: true, userId: true, value: true },
+  });
+  if (!row) return null;
+  // Burn it regardless of expiry (one-time use).
+  await db.appSetting.delete({ where: { id: row.id } }).catch(() => {});
+  const expiresAt = (row.value as { expiresAt?: number } | null)?.expiresAt ?? 0;
+  if (expiresAt < Date.now()) return null;
+  return row.userId;
 }

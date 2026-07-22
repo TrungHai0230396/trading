@@ -50,7 +50,7 @@ async function handleUpdate(u: TgUpdate): Promise<void> {
     if (count > 0) {
       await sendToChat(
         chatId,
-        "Đã ngắt kết nối Vela. Bạn sẽ không nhận thông báo nữa. Kết nối lại bất cứ lúc nào trong app.",
+        "Đã ngắt kết nối Nhật Ký Trade. Bạn sẽ không nhận thông báo nữa. Kết nối lại bất cứ lúc nào trong app.",
       );
     }
     return;
@@ -61,11 +61,11 @@ async function handleUpdate(u: TgUpdate): Promise<void> {
     if (!code) {
       await sendToChat(
         chatId,
-        "👋 Chào bạn! Để nhận thông báo từ Vela, mở app → Cài đặt → Kết nối Telegram và bấm nút ở đó.",
+        "👋 Chào bạn! Để nhận thông báo từ Nhật Ký Trade, mở app → Cài đặt → Kết nối Telegram và bấm nút ở đó.",
       );
       return;
     }
-    const userId = consumeLinkCode(code);
+    const userId = await consumeLinkCode(code);
     if (!userId) {
       await sendToChat(
         chatId,
@@ -74,7 +74,7 @@ async function handleUpdate(u: TgUpdate): Promise<void> {
       return;
     }
     // Bind. Clear any other account currently on this chat first so one
-    // Telegram chat maps to exactly one Vela account.
+    // Telegram chat maps to exactly one Nhật Ký Trade account.
     await db.user.updateMany({
       where: { telegramChatId: String(chatId), NOT: { id: userId } },
       data: { telegramChatId: null, telegramLinkedAt: null },
@@ -85,7 +85,7 @@ async function handleUpdate(u: TgUpdate): Promise<void> {
     });
     await sendToChat(
       chatId,
-      "✅ Đã kết nối Vela! Bạn sẽ nhận cảnh báo lệnh khớp/đóng và tín hiệu đồng thuận ở đây. Gõ /stop để ngắt.",
+      "✅ Đã kết nối Nhật Ký Trade! Bạn sẽ nhận cảnh báo tín hiệu đồng thuận (theo watchlist của bạn) ở đây. Gõ /stop để ngắt.",
     );
   }
 }

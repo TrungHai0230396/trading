@@ -33,7 +33,6 @@ export function tradingViewInterval(timeframe: Timeframe): string {
   if (timeframe === "1h") return "60";
   if (timeframe === "4h") return "240";
   if (timeframe === "1d") return "D";
-  if (timeframe === "3d") return "3D";
   if (timeframe === "1w") return "W";
   return "M";
 }

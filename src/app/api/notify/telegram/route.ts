@@ -54,7 +54,7 @@ export async function POST() {
     );
   }
 
-  const code = createLinkCode(session.user.id);
+  const code = await createLinkCode(session.user.id);
   return NextResponse.json({ url: `https://t.me/${username}?start=${code}` });
 }
 

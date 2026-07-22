@@ -11,6 +11,7 @@ import {
   Eye,
   EyeOff,
   Loader2,
+  LineChart as LineChartIcon,
   Radar,
   Plus,
   Settings2,
@@ -136,7 +137,9 @@ function parseStoredTimeframes(value: string | null): Timeframe[] | null {
 }
 
 function normalizeChartSelection(selection: ChartSelection): ChartSelection {
-  return selection.timeframe === "3d"
+  // "3d" was removed (TradingView's public chart can't render a 3-day link).
+  // Coerce any legacy value still persisted in localStorage to the default.
+  return (selection.timeframe as string) === "3d"
     ? { ...selection, timeframe: DEFAULT_CHART_TIMEFRAME }
     : selection;
 }
@@ -953,7 +956,7 @@ function ConsensusTopRow({
         aria-label={`Xem chart ${row.symbol} bên dưới`}
         title="Hiển thị chart phía dưới"
       >
-        <LineChart className="size-3" />
+        <LineChartIcon className="size-3" />
       </button>
       <a
         href={chartUrl}
@@ -1918,7 +1921,7 @@ function ConsensusConfigSection({
   );
 }
 
-const ALERT_TFS: Timeframe[] = ["15m", "1h", "4h", "1d", "3d", "1w", "1M"];
+const ALERT_TFS: Timeframe[] = ["15m", "1h", "4h", "1d", "1w", "1M"];
 
 function WatchlistRow({
   symbol,

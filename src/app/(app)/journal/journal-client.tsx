@@ -168,41 +168,29 @@ export function JournalClient() {
   const updateFilter = <K extends keyof Filters>(key: K, value: Filters[K]) =>
     setFilters((s) => ({ ...s, [key]: value }));
 
-  // ─── Bitget read-only sync ──────────────────────────────────────────
+  // ─── Read-only broker sync: import OPEN positions into the journal ──────
   const queryClient = useQueryClient();
-  const syncBitget = useMutation({
+  const syncBroker = useMutation({
     mutationFn: async () => {
-      const res = await fetch("/api/journal/sync-bitget", { method: "POST" });
+      const res = await fetch("/api/journal/sync-broker", { method: "POST" });
       const j = await res.json();
       if (!res.ok) throw new Error(j?.error ?? "Đồng bộ thất bại");
       return j as {
-        scanned: number;
-        changes: Array<{ before: string; after: string; note?: string }>;
-        errors: Array<{ message: string }>;
+        created: number;
+        updated: number;
+        byBroker: Array<{ broker: string; open: number; error?: string }>;
       };
     },
     onSuccess: (data) => {
-      if (data.changes.length > 0) {
-        for (const c of data.changes) {
-          toast.success(
-            `Bitget: ${c.before} → ${c.after}${c.note ? ` · ${c.note}` : ""}`,
-            { duration: 6000 },
-          );
-        }
-        // Refresh journal list + stats since some entries may have moved
-        // from OPEN to CLOSED/CANCELED.
+      // New or refreshed open positions → refresh the list + stats.
+      if (data.created + data.updated > 0) {
         queryClient.invalidateQueries({ queryKey: ["journal"] });
-      }
-      if (data.errors.length > 0) {
-        toast.error(
-          `Đồng bộ có ${data.errors.length} lỗi: ${data.errors[0]!.message}`,
-        );
       }
     },
     onError: (err) => {
-      // Silent for the auto-run on mount; only show when user explicitly
-      // clicked the button (handled below via onClick wrapping).
-      console.warn("sync-bitget error", err);
+      // Silent for the auto-run on mount; the explicit button wraps its own
+      // onError to surface the message.
+      console.warn("sync-broker error", err);
     },
   });
 
@@ -235,18 +223,22 @@ export function JournalClient() {
   const brokerStatus = useQuery<{ connected: boolean }>({
     queryKey: ["journal", "broker-connected"],
     queryFn: async ({ signal }) => {
-      const [bg, bn] = await Promise.all([
+      const [bg, bn, mx] = await Promise.all([
         fetch("/api/brokers/bitget/keys", { signal })
           .then((r) => (r.ok ? r.json() : { connected: false }))
           .catch(() => ({ connected: false })),
         fetch("/api/brokers/binance/keys", { signal })
           .then((r) => (r.ok ? r.json() : { connected: false }))
           .catch(() => ({ connected: false })),
+        fetch("/api/brokers/mexc/keys", { signal })
+          .then((r) => (r.ok ? r.json() : { connected: false }))
+          .catch(() => ({ connected: false })),
       ]);
       return {
         connected:
           (bg as { connected?: boolean }).connected === true ||
-          (bn as { connected?: boolean }).connected === true,
+          (bn as { connected?: boolean }).connected === true ||
+          (mx as { connected?: boolean }).connected === true,
       };
     },
     staleTime: 5 * 60_000,
@@ -262,16 +254,16 @@ export function JournalClient() {
   // Mirror isPending into a ref so the interval closure reads the CURRENT
   // value, not the stale first-render one.
   const syncPendingRef = React.useRef(false);
-  syncPendingRef.current = syncBitget.isPending;
+  syncPendingRef.current = syncBroker.isPending;
   React.useEffect(() => {
     if (!brokerConnected) return;
     if (!didAutoSync.current) {
       didAutoSync.current = true;
-      syncBitget.mutate();
+      syncBroker.mutate();
     }
     const interval = setInterval(() => {
       if (syncPendingRef.current || document.hidden) return;
-      syncBitget.mutate();
+      syncBroker.mutate();
     }, 60_000);
     return () => clearInterval(interval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -295,10 +287,21 @@ export function JournalClient() {
                 variant="outline"
                 size="sm"
                 onClick={() => {
-                  syncBitget.mutate(undefined, {
+                  syncBroker.mutate(undefined, {
                     onSuccess: (data) => {
-                      if (data.changes.length === 0 && data.errors.length === 0) {
-                        toast.message("Không có thay đổi từ sàn.");
+                      const n = data.created + data.updated;
+                      const firstErr = data.byBroker.find((b) => b.error)?.error;
+                      if (n === 0) {
+                        toast.message(
+                          firstErr
+                            ? `Không nhập được: ${firstErr}`
+                            : "Không có vị thế đang mở nào trên sàn.",
+                        );
+                      } else {
+                        toast.success(
+                          `Đã nhập ${data.created} vị thế mới, cập nhật ${data.updated} từ sàn.`,
+                        );
+                        if (firstErr) toast.message(firstErr);
                       }
                     },
                     onError: (err) => {
@@ -308,10 +311,10 @@ export function JournalClient() {
                     },
                   });
                 }}
-                disabled={syncBitget.isPending}
-                title="Kéo trạng thái mới nhất từ sàn crypto đã kết nối. Chỉ đọc, không đặt/huỷ lệnh."
+                disabled={syncBroker.isPending}
+                title="Đọc vị thế đang mở trên sàn đã kết nối và nhập vào Nhật ký. Chỉ đọc, không đặt/huỷ lệnh."
               >
-                {syncBitget.isPending ? (
+                {syncBroker.isPending ? (
                   <Loader2 className="size-4 animate-spin" />
                 ) : (
                   <RefreshCcw className="size-4" />

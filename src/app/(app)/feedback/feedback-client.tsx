@@ -22,7 +22,7 @@ type FType = "BUG" | "FEATURE" | "OTHER";
 const TYPES: { value: FType; label: string; icon: typeof Bug; hint: string }[] =
   [
     { value: "BUG", label: "Báo lỗi", icon: Bug, hint: "Gặp lỗi, sai số liệu, trang trắng…" },
-    { value: "FEATURE", label: "Tính năng mới", icon: Sparkles, hint: "Muốn Vela có thêm gì?" },
+    { value: "FEATURE", label: "Tính năng mới", icon: Sparkles, hint: "Muốn Nhật Ký Trade có thêm gì?" },
     { value: "OTHER", label: "Góp ý khác", icon: MessageCircle, hint: "Trải nghiệm, câu hỏi, lời chào…" },
   ];
 
@@ -77,7 +77,7 @@ export function FeedbackClient({ email }: { email: string | null }) {
           <div>
             <p className="font-medium">Đã nhận được phản hồi của bạn</p>
             <p className="text-sm text-muted-foreground">
-              Cảm ơn đã giúp Vela tốt hơn. Cần báo thêm gì cứ gửi tiếp nhé.
+              Cảm ơn đã giúp Nhật Ký Trade tốt hơn. Cần báo thêm gì cứ gửi tiếp nhé.
             </p>
           </div>
           <Button variant="outline" size="sm" onClick={() => setSent(false)}>
@@ -93,7 +93,7 @@ export function FeedbackClient({ email }: { email: string | null }) {
       <CardHeader>
         <CardTitle className="text-base">Gửi phản hồi</CardTitle>
         <CardDescription>
-          Vela đang trong giai đoạn thử nghiệm — mọi báo lỗi và ý tưởng đều quý.
+          Nhật Ký Trade đang trong giai đoạn thử nghiệm — mọi báo lỗi và ý tưởng đều quý.
           {email ? (
             <>
               {" "}
@@ -153,7 +153,7 @@ export function FeedbackClient({ email }: { email: string | null }) {
               type === "BUG"
                 ? "Bạn đang làm gì thì gặp lỗi? Lỗi hiện ra sao? Càng cụ thể càng dễ sửa."
                 : type === "FEATURE"
-                  ? "Bạn muốn Vela làm được thêm điều gì, và để giải quyết việc gì?"
+                  ? "Bạn muốn Nhật Ký Trade làm được thêm điều gì, và để giải quyết việc gì?"
                   : "Chia sẻ bất cứ điều gì bạn nghĩ tới…"
             }
           />

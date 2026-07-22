@@ -120,6 +120,14 @@ model TradeJournal {
   status    TradeStatus    @default(OPEN)
   timeframe String?
 
+  // Read-only broker import. `source` = null/"MANUAL" for hand-entered rows,
+  // "BROKER" for positions imported from a connected exchange. `brokerRef` is
+  // the dedup key "BROKER:SYMBOL:SIDE" so re-syncing UPDATES the same entry
+  // instead of duplicating it. Null for manual entries (MySQL allows many
+  // nulls in a unique index, so hand-entered rows never collide).
+  source    String?
+  brokerRef String?
+
   entryPrice Decimal  @db.Decimal(20, 8)
   exitPrice  Decimal? @db.Decimal(20, 8)
   stopLoss   Decimal? @db.Decimal(20, 8)
@@ -153,6 +161,7 @@ model TradeJournal {
   screenshots   TradeScreenshot[]
   tags          TradeJournalTag[]
 
+  @@unique([userId, brokerRef])
   @@index([userId, openedAt])
   @@index([userId, status])
   @@index([symbol])
@@ -345,6 +354,7 @@ enum ApiKeyKind {
   COINGECKO
   BITGET
   BINANCE
+  MEXC
   METAAPI
   TELEGRAM
   CUSTOM

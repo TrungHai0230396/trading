@@ -18,7 +18,12 @@ import { encryptJson, decryptJson } from "@/lib/crypto-json";
 
 // TELEGRAM rides the same encrypted-credentials rails as the brokers —
 // a bot token is a secret exactly like an API key.
-export type BrokerKind = "BITGET" | "BINANCE" | "METAAPI" | "TELEGRAM";
+export type BrokerKind =
+  | "BITGET"
+  | "BINANCE"
+  | "MEXC"
+  | "METAAPI"
+  | "TELEGRAM";
 
 export async function saveCreds<T>(
   userId: string,
