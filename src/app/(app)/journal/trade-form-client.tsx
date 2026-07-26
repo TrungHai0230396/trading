@@ -725,7 +725,7 @@ export function TradeFormClient({
               </Field>
             </div>
 
-            <Field label="P/L (override)" hint="Để trống để tự tính khi đóng lệnh.">
+            <Field label="P/L thực tế (USD)" hint="Nhập lãi/lỗ THẬT từ sàn khi lệnh đã đóng. Để trống sẽ tự suy từ giá vào/ra.">
               <Input
                 inputMode="decimal"
                 className="num"

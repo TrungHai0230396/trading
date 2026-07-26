@@ -11,9 +11,10 @@ import { auth, googleOnlyIntent } from "@/lib/auth";
 import {
   BinanceBrokerCard,
   BitgetBrokerCard,
+  BrokerConnectionSummary,
   ChangePasswordCard,
-  MetaApiBrokerCard,
   MexcBrokerCard,
+  OkxBrokerCard,
   TelegramNotifyCard,
 } from "./brokers-client";
 
@@ -31,15 +32,19 @@ export default async function SettingsPage() {
         <TabsList>
           <TabsTrigger value="brokers">Sàn giao dịch</TabsTrigger>
           <TabsTrigger value="account">Tài khoản</TabsTrigger>
-          <TabsTrigger value="preferences">Tùy chọn</TabsTrigger>
         </TabsList>
 
-        <TabsContent value="brokers" className="mt-4 space-y-4">
-          <BitgetBrokerCard />
-          <BinanceBrokerCard />
-          <MexcBrokerCard />
+        <TabsContent value="brokers" className="mt-4 space-y-6">
+          <BrokerConnectionSummary />
+          <div className="grid items-start gap-4 sm:grid-cols-2">
+            <BitgetBrokerCard />
+            <BinanceBrokerCard />
+            <MexcBrokerCard />
+            <OkxBrokerCard />
+          </div>
           <TelegramNotifyCard />
-          <MetaApiBrokerCard />
+          {/* MetaApi (Exness / MT4 · MT5) tạm ẩn — chưa setup được. Component
+              vẫn còn trong brokers-client.tsx để bật lại khi sẵn sàng. */}
         </TabsContent>
 
         <TabsContent value="account" className="mt-4 space-y-4">
@@ -63,18 +68,11 @@ export default async function SettingsPage() {
           </Card>
           {/* No password to change when Google is the only login method. */}
           {googleOnlyIntent ? null : <ChangePasswordCard />}
-        </TabsContent>
 
-        <TabsContent value="preferences" className="mt-4">
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base">Tùy chọn</CardTitle>
-              <CardDescription>
-                Tiền tệ tài khoản mặc định, đơn vị lot, chủ đề giao diện — sẽ
-                có ở giai đoạn tiếp theo.
-              </CardDescription>
-            </CardHeader>
-          </Card>
+          <p className="text-xs text-muted-foreground">
+            Tùy chọn (tiền tệ mặc định, đơn vị lot, chủ đề giao diện) sẽ có ở
+            giai đoạn tiếp theo.
+          </p>
         </TabsContent>
       </Tabs>
     </div>

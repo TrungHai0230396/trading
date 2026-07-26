@@ -22,6 +22,7 @@ export type BrokerKind =
   | "BITGET"
   | "BINANCE"
   | "MEXC"
+  | "OKX"
   | "METAAPI"
   | "TELEGRAM";
 

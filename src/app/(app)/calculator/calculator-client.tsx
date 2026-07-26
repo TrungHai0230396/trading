@@ -76,6 +76,7 @@ type FormState = {
   stopPips: string;         // FX (pips mode)
   entryPrice: string;       // FX (price mode) + Crypto
   stopPrice: string;        // FX (price mode) + Crypto
+  tpPrice: string;          // Take profit price (optional) — for R:R + journal
 };
 
 const INITIAL_STATE: FormState = {
@@ -87,6 +88,7 @@ const INITIAL_STATE: FormState = {
   stopPips: "51.2",
   entryPrice: "",
   stopPrice: "",
+  tpPrice: "",
 };
 
 // Allow comma decimals (European style) in number inputs.
@@ -117,6 +119,8 @@ function stateFromSearchParams(
   if (stopPips) next.stopPips = stopPips;
   const entryPrice = params.get("entryPrice");
   if (entryPrice) next.entryPrice = entryPrice;
+  const takeProfit = params.get("takeProfit") ?? params.get("takeProfitPrice");
+  if (takeProfit) next.tpPrice = takeProfit;
   const stopPrice = params.get("stopPrice");
   if (stopPrice) {
     next.stopPrice = stopPrice;
@@ -184,6 +188,7 @@ export function CalculatorClient() {
                 state.stopMode === "pips"
                   ? num(state.stopPips)
                   : num(state.stopPrice),
+              takeProfitPrice: state.tpPrice ? num(state.tpPrice) : undefined,
               riskMode: "fixed",
               riskValue: num(state.riskAmount),
             }
@@ -194,6 +199,7 @@ export function CalculatorClient() {
               direction: "LONG",
               entryPrice: num(state.entryPrice),
               stopPrice: num(state.stopPrice),
+              takeProfitPrice: state.tpPrice ? num(state.tpPrice) : undefined,
               riskMode: "fixed",
               riskValue: num(state.riskAmount),
             };
@@ -222,6 +228,7 @@ export function CalculatorClient() {
       stopPips: "20",
       entryPrice: "",
       stopPrice: "",
+      tpPrice: "",
     });
     setResult(null);
   };
@@ -324,31 +331,42 @@ export function CalculatorClient() {
               </Tabs>
 
               {state.stopMode === "price" ? (
-                <Field label="Giá vào lệnh">
-                  <div className="flex gap-2">
+                <>
+                  <Field label="Giá vào lệnh">
+                    <div className="flex gap-2">
+                      <Input
+                        inputMode="decimal"
+                        className="num"
+                        value={state.entryPrice}
+                        onChange={(e) => update("entryPrice", e.target.value)}
+                        placeholder="1.0850"
+                      />
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => fetchPrice.mutate()}
+                        disabled={fetchPrice.isPending || !state.symbol}
+                      >
+                        <RefreshCw
+                          className={cn(
+                            "mr-1 size-4",
+                            fetchPrice.isPending && "animate-spin",
+                          )}
+                        />
+                        Live
+                      </Button>
+                    </div>
+                  </Field>
+                  <Field label="Take profit (giá — tuỳ chọn)">
                     <Input
                       inputMode="decimal"
                       className="num"
-                      value={state.entryPrice}
-                      onChange={(e) => update("entryPrice", e.target.value)}
-                      placeholder="1.0850"
+                      value={state.tpPrice}
+                      onChange={(e) => update("tpPrice", e.target.value)}
+                      placeholder="Để trống nếu chưa đặt TP"
                     />
-                    <Button
-                      type="button"
-                      variant="outline"
-                      onClick={() => fetchPrice.mutate()}
-                      disabled={fetchPrice.isPending || !state.symbol}
-                    >
-                      <RefreshCw
-                        className={cn(
-                          "mr-1 size-4",
-                          fetchPrice.isPending && "animate-spin",
-                        )}
-                      />
-                      Live
-                    </Button>
-                  </div>
-                </Field>
+                  </Field>
+                </>
               ) : null}
             </TabsContent>
 
@@ -425,6 +443,16 @@ export function CalculatorClient() {
                   value={state.stopPrice}
                   onChange={(e) => update("stopPrice", e.target.value)}
                   placeholder="0.00"
+                />
+              </Field>
+
+              <Field label="Take profit (giá — tuỳ chọn)">
+                <Input
+                  inputMode="decimal"
+                  className="num"
+                  value={state.tpPrice}
+                  onChange={(e) => update("tpPrice", e.target.value)}
+                  placeholder="Để trống nếu chưa đặt TP"
                 />
               </Field>
             </TabsContent>
@@ -606,18 +634,6 @@ function ResultPanel({
           </>
         ) : null}
 
-        {result.market === "CRYPTO" ? (
-          <>
-            <Separator />
-            <BinanceOrderHint
-              base={result.meta.display.split(" / ")[0]}
-              quoteCcy={result.meta.quoteCurrency}
-              units={result.positionSize.units}
-              notional={result.notional}
-            />
-          </>
-        ) : null}
-
         {result.meta.quoteToAccountRate !== 1 ? (
           <>
             <Separator />
@@ -668,9 +684,12 @@ function CreateTradeButton({
       : "SHORT"
     : null;
 
+  // Forex: làm tròn XUỐNG về bước lot 0.01 để size ghi vào nhật ký không vượt
+  // quá risk đã tính (0.012 std lot → 0.01, không phải 0.012). Crypto để units
+  // lẻ như cũ (không có bước 0.01).
   const lotSize =
     result.market === "FOREX"
-      ? result.positionSize.standardLots ?? 0
+      ? Math.floor((result.positionSize.standardLots ?? 0) * 100) / 100
       : result.positionSize.units;
 
   // Strip the "BASE / QUOTE" display name down to the broker symbol — for
@@ -686,6 +705,8 @@ function CreateTradeButton({
     params.set("entryPrice", String(entry));
   if (Number.isFinite(stop) && stop > 0)
     params.set("stopLoss", String(stop));
+  const tp = num(state.tpPrice);
+  if (Number.isFinite(tp) && tp > 0) params.set("takeProfit", String(tp));
   if (lotSize > 0) params.set("lotSize", String(lotSize));
   if (result.riskAmount > 0)
     params.set("riskAmount", String(result.riskAmount));
@@ -727,9 +748,9 @@ function CreateTradeButton({
       ) : (
         <p className="text-[11px] leading-relaxed text-muted-foreground">
           Mở form Nhật ký với các trường đã điền sẵn ({symbolParam}, {direction},
-          {" "}vào {entry}, SL {stop}, {result.market === "CRYPTO" ? `${lotSize} units` : `${lotSize} lots`}).
-          Trong form bạn có thể bật toggle &ldquo;Đặt lệnh thật trên Bitget&rdquo;
-          để tự gửi sang sàn.
+          {" "}vào {entry}, SL {stop}, {result.market === "CRYPTO" ? `${lotSize} units` : `${lotSize} lots`})
+          {" "}để bạn ghi lại. App chỉ-đọc, không đặt lệnh hộ — bạn tự vào lệnh
+          trên sàn rồi lưu vào nhật ký.
         </p>
       )}
     </div>
@@ -821,106 +842,3 @@ function ForexRoundingOptions({
   );
 }
 
-function BinanceOrderHint({
-  base,
-  quoteCcy,
-  units,
-  notional,
-}: {
-  base: string;
-  quoteCcy: string;
-  units: number;
-  notional: number;
-}) {
-  const fmt = (n: number, dp = 2) =>
-    new Intl.NumberFormat("en-US", {
-      minimumFractionDigits: dp,
-      maximumFractionDigits: dp,
-    }).format(n);
-
-  return (
-    <div className="space-y-3 rounded-md border border-bullish/40 bg-bullish/5 p-3">
-      <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-        Nhập trên sàn (Binance Futures)
-      </div>
-
-      <p className="text-[11px] leading-relaxed text-muted-foreground">
-        Trên Binance, ô <strong>Quantity</strong> có dropdown đổi đơn vị giữa{" "}
-        <strong>{base}</strong> và <strong>{quoteCcy}</strong>. Chọn 1 trong 2,
-        nhập đúng số bên dưới.
-      </p>
-
-      <div className="space-y-2">
-        <CopyRow label={`Quantity (${quoteCcy})`} value={fmt(notional)} highlight />
-        <CopyRow label={`Quantity (${base})`} value={fmt(units, 8)} />
-      </div>
-
-      <div className="rounded-md border border-warning/40 bg-warning/10 p-2 text-[11px] leading-relaxed text-warning">
-        <strong>⚠️ Đừng nhập số này vào ô Cost/Margin.</strong> Đây là{" "}
-        <strong>notional</strong> (giá trị vị thế), không phải margin. Margin
-        sàn tự lock — bạn không cần nhập.
-      </div>
-    </div>
-  );
-}
-
-function CopyRow({
-  label,
-  value,
-  highlight,
-  muted,
-}: {
-  label: string;
-  value: string;
-  highlight?: boolean;
-  muted?: boolean;
-}) {
-  const [copied, setCopied] = React.useState(false);
-  const onCopy = () => {
-    if (typeof navigator === "undefined" || !navigator.clipboard) return;
-    // Strip thousands separators from the display value before copying so
-    // the user can paste straight into Binance without manually cleaning.
-    const clean = value.replace(/[, ]/g, "").replace(/[^\d.\-]/g, "");
-    navigator.clipboard.writeText(clean).then(() => {
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1200);
-    });
-  };
-
-  return (
-    <div
-      className={cn(
-        "flex items-center justify-between gap-2 rounded-md border px-2.5 py-1.5",
-        highlight
-          ? "border-bullish/50 bg-bullish/10"
-          : muted
-            ? "border-border/50 bg-muted/30"
-            : "border-border bg-card/40",
-      )}
-    >
-      <span
-        className={cn(
-          "text-xs",
-          highlight ? "font-medium text-foreground" : "text-muted-foreground",
-        )}
-      >
-        {label}
-      </span>
-      <button
-        type="button"
-        onClick={onCopy}
-        className={cn(
-          "num group flex items-center gap-1.5 text-sm font-medium transition",
-          highlight ? "text-bullish" : "text-foreground",
-        )}
-        aria-label={`Copy ${label}`}
-        title="Click để copy"
-      >
-        <span>{value}</span>
-        <span className="text-[10px] uppercase opacity-50 group-hover:opacity-100">
-          {copied ? "đã copy" : "copy"}
-        </span>
-      </button>
-    </div>
-  );
-}

@@ -12,7 +12,7 @@
  *   still works — it just won't attribute the signup to you.
  */
 
-export type Exchange = "BITGET" | "BINANCE" | "MEXC";
+export type Exchange = "BITGET" | "BINANCE" | "MEXC" | "OKX";
 
 export type ExchangeLinks = {
   /** Owner referral link — where "Mở tài khoản" points. */
@@ -36,5 +36,11 @@ export const EXCHANGE_LINKS: Record<Exchange, ExchangeLinks> = {
     // Owner referral link (MEXC promote).
     register: "https://promote.mexc.com/r/khTQ4da01Y",
     apiKey: "https://www.mexc.com/user/openapi",
+  },
+  OKX: {
+    // TODO(referral): thay bằng link giới thiệu OKX của bạn
+    // (https://www.okx.com/join/<CODE>).
+    register: "https://www.okx.com/join",
+    apiKey: "https://www.okx.com/account/my-api",
   },
 };

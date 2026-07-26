@@ -98,7 +98,7 @@ export default function TermsPage() {
             Ứng dụng được cung cấp “nguyên trạng” (as-is). Trong phạm vi tối
             đa pháp luật cho phép, Nhật Ký Trade không chịu trách nhiệm cho bất
             kỳ tổn thất nào phát sinh từ: quyết định giao dịch của bạn; dữ
-            liệu thị trường sai/chậm từ bên thứ ba (Binance, Bitget, MEXC, nhà
+            liệu thị trường sai/chậm từ bên thứ ba (Binance, Bitget, MEXC, OKX, nhà
             cung cấp dữ liệu); gián đoạn dịch vụ, lỗi phần mềm; hoặc thông
             báo đến chậm/thất lạc (Telegram, mạng). Tín hiệu kỹ thuật có thể
             sai — và thường xuyên sai trong thị trường biến động.

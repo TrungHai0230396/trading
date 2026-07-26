@@ -10,10 +10,17 @@
  */
 
 const FEEDS: { source: string; url: string }[] = [
+  // Nguồn tiếng Việt — ưu tiên hiển thị (dẫn nguồn báo VN).
+  { source: "Blog Tiền Ảo", url: "https://blogtienao.com/feed" },
+  // Google News tiếng Việt, lọc theo crypto (query né nhiễu "giá điện" bằng
+  // "tiền mã hóa"/"tiền ảo"); tổng hợp nhiều báo VN (VnExpress, Thanh Niên…).
+  {
+    source: "Google News VN",
+    url: "https://news.google.com/rss/search?q=Bitcoin%20OR%20crypto%20OR%20%22ti%E1%BB%81n%20m%C3%A3%20h%C3%B3a%22%20OR%20%22ti%E1%BB%81n%20%E1%BA%A3o%22%20when:2d&hl=vi&gl=VN&ceid=VN:vi",
+  },
+  // Báo lớn toàn cầu — tin breaking thường nhanh hơn nguồn VN.
   { source: "CoinDesk", url: "https://www.coindesk.com/arc/outboundfeeds/rss/" },
   { source: "Cointelegraph", url: "https://cointelegraph.com/rss" },
-  { source: "Decrypt", url: "https://decrypt.co/feed" },
-  { source: "The Defiant", url: "https://thedefiant.io/api/feed" },
 ];
 
 export type RssArticle = {

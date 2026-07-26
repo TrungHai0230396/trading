@@ -62,6 +62,7 @@ enum TradeDirection {
 }
 
 enum TradeStatus {
+  PENDING
   OPEN
   CLOSED
   CANCELED
@@ -355,6 +356,7 @@ enum ApiKeyKind {
   BITGET
   BINANCE
   MEXC
+  OKX
   METAAPI
   TELEGRAM
   CUSTOM

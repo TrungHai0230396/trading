@@ -58,7 +58,7 @@ import type {
 // ──────────────────────────────────────────────────────────────────────
 type Filters = {
   market: "ALL" | "FOREX" | "CRYPTO" | "STOCK" | "COMMODITY" | "INDEX" | "OTHER";
-  status: "ALL" | "OPEN" | "CLOSED" | "CANCELED";
+  status: "ALL" | "PENDING" | "OPEN" | "CLOSED" | "CANCELED";
   symbol: string;
   from: string;
   to: string;
@@ -223,7 +223,7 @@ export function JournalClient() {
   const brokerStatus = useQuery<{ connected: boolean }>({
     queryKey: ["journal", "broker-connected"],
     queryFn: async ({ signal }) => {
-      const [bg, bn, mx] = await Promise.all([
+      const [bg, bn, mx, ok] = await Promise.all([
         fetch("/api/brokers/bitget/keys", { signal })
           .then((r) => (r.ok ? r.json() : { connected: false }))
           .catch(() => ({ connected: false })),
@@ -233,12 +233,16 @@ export function JournalClient() {
         fetch("/api/brokers/mexc/keys", { signal })
           .then((r) => (r.ok ? r.json() : { connected: false }))
           .catch(() => ({ connected: false })),
+        fetch("/api/brokers/okx/keys", { signal })
+          .then((r) => (r.ok ? r.json() : { connected: false }))
+          .catch(() => ({ connected: false })),
       ]);
       return {
         connected:
           (bg as { connected?: boolean }).connected === true ||
           (bn as { connected?: boolean }).connected === true ||
-          (mx as { connected?: boolean }).connected === true,
+          (mx as { connected?: boolean }).connected === true ||
+          (ok as { connected?: boolean }).connected === true,
       };
     },
     staleTime: 5 * 60_000,
@@ -366,6 +370,7 @@ export function JournalClient() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="ALL">Tất cả</SelectItem>
+                  <SelectItem value="PENDING">Chờ khớp</SelectItem>
                   <SelectItem value="OPEN">Đang mở</SelectItem>
                   <SelectItem value="CLOSED">Đã đóng</SelectItem>
                   <SelectItem value="CANCELED">Đã hủy</SelectItem>
@@ -679,37 +684,9 @@ function TradeRow({
       >
         {pnl !== null ? (
           `${pnl > 0 ? "+" : ""}${fmtNum(pnl)}`
-        ) : live ? (
-          <div>
-            <div
-              className={cn(
-                live.unrealizedPnl > 0 && "text-bullish",
-                live.unrealizedPnl < 0 && "text-bearish",
-              )}
-              title="P/L tạm tính theo giá live"
-            >
-              ~{live.unrealizedPnl > 0 ? "+" : ""}
-              {fmtNum(live.unrealizedPnl)}
-            </div>
-            {live.slProgress !== null || live.tpProgress !== null ? (
-              <div className="text-[10px] font-normal text-muted-foreground">
-                {live.tpProgress !== null
-                  ? `TP ${Math.round(live.tpProgress * 100)}%`
-                  : null}
-                {live.tpProgress !== null && live.slProgress !== null
-                  ? " · "
-                  : null}
-                {live.slProgress !== null ? (
-                  <span
-                    className={cn(live.slProgress >= 0.7 && "text-bearish")}
-                  >
-                    SL {Math.round(live.slProgress * 100)}%
-                  </span>
-                ) : null}
-              </div>
-            ) : null}
-          </div>
         ) : (
+          // Lệnh đang mở/chờ khớp KHÔNG hiện P/L — app không tự ước lượng; bạn
+          // tự nhập lãi/lỗ thật từ sàn khi lệnh đã đóng.
           "—"
         )}
       </TableCell>
@@ -738,6 +715,13 @@ function TradeRow({
 }
 
 function StatusBadge({ status }: { status: string }) {
+  if (status === "PENDING") {
+    return (
+      <Badge variant="outline" className="border-dashed text-muted-foreground">
+        Chờ khớp
+      </Badge>
+    );
+  }
   if (status === "OPEN") {
     return (
       <Badge variant="outline" className="border-transparent bg-info/10 text-info">

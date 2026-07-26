@@ -35,13 +35,19 @@ import {
   MexcError,
   type MexcCreds,
 } from "@/lib/brokers/mexc";
+import {
+  getOpenPositions as okxOpenPositions,
+  OkxError,
+  type OkxCreds,
+} from "@/lib/brokers/okx";
 
-type BrokerName = "BITGET" | "BINANCE" | "MEXC";
+type BrokerName = "BITGET" | "BINANCE" | "MEXC" | "OKX";
 
 const LABEL: Record<BrokerName, string> = {
   BITGET: "Bitget",
   BINANCE: "Binance",
   MEXC: "MEXC",
+  OKX: "OKX",
 };
 
 export type ImportResult = {
@@ -61,7 +67,12 @@ function isUniqueViolation(e: unknown): boolean {
 }
 
 function errText(broker: BrokerName, e: unknown): string {
-  if (e instanceof BitgetError || e instanceof BinanceError || e instanceof MexcError) {
+  if (
+    e instanceof BitgetError ||
+    e instanceof BinanceError ||
+    e instanceof MexcError ||
+    e instanceof OkxError
+  ) {
     return e.toVietnamese();
   }
   if (e instanceof Error && e.name === "TimeoutError") {
@@ -71,10 +82,11 @@ function errText(broker: BrokerName, e: unknown): string {
 }
 
 export async function importOpenPositions(userId: string): Promise<ImportResult> {
-  const [bitget, binance, mexc] = await Promise.all([
+  const [bitget, binance, mexc, okx] = await Promise.all([
     loadCreds<BitgetCreds>(userId, "BITGET"),
     loadCreds<BinanceCreds>(userId, "BINANCE"),
     loadCreds<MexcCreds>(userId, "MEXC"),
+    loadCreds<OkxCreds>(userId, "OKX"),
   ]);
 
   const byBroker: ImportResult["byBroker"] = [];
@@ -160,6 +172,7 @@ export async function importOpenPositions(userId: string): Promise<ImportResult>
   if (bitget) jobs.push(runOne("BITGET", () => bitgetOpenPositions(bitget)));
   if (binance) jobs.push(runOne("BINANCE", () => binanceOpenPositions(binance)));
   if (mexc) jobs.push(runOne("MEXC", () => mexcOpenPositions(mexc)));
+  if (okx) jobs.push(runOne("OKX", () => okxOpenPositions(okx)));
   await Promise.all(jobs);
 
   return { created, updated, byBroker };

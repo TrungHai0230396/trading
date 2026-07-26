@@ -98,7 +98,7 @@ type NewsItem = {
 
 type Portfolio = {
   brokers: Array<{
-    broker: "BITGET" | "BINANCE" | "MEXC";
+    broker: "BITGET" | "BINANCE" | "MEXC" | "OKX";
     spot: {
       totalUsd: number;
       assets: Array<{ coin: string; total: number; usdValue: number }>;
@@ -276,8 +276,8 @@ export function DashboardClient() {
               <div>
                 <p className="font-medium">Chưa kết nối sàn nào</p>
                 <p className="text-sm text-muted-foreground">
-                  Kết nối Bitget, Binance hoặc MEXC để xem tổng tài sản — chỉ
-                  đọc, không cần quyền rút tiền.
+                  Kết nối Bitget, Binance, MEXC hoặc OKX để xem tổng tài sản —
+                  chỉ đọc, không cần quyền rút tiền.
                 </p>
               </div>
             </div>
@@ -695,7 +695,9 @@ function BrokerPanel({
       ? "Bitget"
       : b.broker === "BINANCE"
         ? "Binance"
-        : "MEXC";
+        : b.broker === "MEXC"
+          ? "MEXC"
+          : "OKX";
   const errored = Boolean(b.spot.error || b.futures.error);
   const total = b.spot.totalUsd + b.futures.equity;
   const upnl = b.futures.unrealizedPnl;

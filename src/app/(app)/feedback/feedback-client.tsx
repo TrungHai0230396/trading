@@ -26,7 +26,7 @@ const TYPES: { value: FType; label: string; icon: typeof Bug; hint: string }[] =
     { value: "OTHER", label: "Góp ý khác", icon: MessageCircle, hint: "Trải nghiệm, câu hỏi, lời chào…" },
   ];
 
-export function FeedbackClient({ email }: { email: string | null }) {
+export function FeedbackClient() {
   const [type, setType] = React.useState<FType>("BUG");
   const [message, setMessage] = React.useState("");
   const [context, setContext] = React.useState("");
@@ -93,15 +93,8 @@ export function FeedbackClient({ email }: { email: string | null }) {
       <CardHeader>
         <CardTitle className="text-base">Gửi phản hồi</CardTitle>
         <CardDescription>
-          Nhật Ký Trade đang trong giai đoạn thử nghiệm — mọi báo lỗi và ý tưởng đều quý.
-          {email ? (
-            <>
-              {" "}
-              Mình sẽ liên hệ lại qua{" "}
-              <span className="font-medium text-foreground">{email}</span> nếu
-              cần.
-            </>
-          ) : null}
+          Nhật Ký Trade đang trong giai đoạn thử nghiệm — mọi báo lỗi và ý tưởng
+          đều quý. Mình sẽ xem và liên hệ lại nếu cần.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-5">

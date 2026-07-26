@@ -11,7 +11,7 @@ export const MARKETS = [
 ] as const;
 
 export const DIRECTIONS = ["LONG", "SHORT"] as const;
-export const STATUSES = ["OPEN", "CLOSED", "CANCELED"] as const;
+export const STATUSES = ["PENDING", "OPEN", "CLOSED", "CANCELED"] as const;
 
 const optionalString = z
   .string()

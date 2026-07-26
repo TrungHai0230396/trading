@@ -1,0 +1,2 @@
+-- AlterTable
+ALTER TABLE `TradeJournal` MODIFY `status` ENUM('PENDING', 'OPEN', 'CLOSED', 'CANCELED') NOT NULL DEFAULT 'OPEN';

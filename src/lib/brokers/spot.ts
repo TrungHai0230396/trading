@@ -35,6 +35,12 @@ import {
   MexcError,
   type MexcCreds,
 } from "@/lib/brokers/mexc";
+import {
+  getSpotBalances as getOkxSpotBalances,
+  getAccountBalance as getOkxFuturesBalance,
+  OkxError,
+  type OkxCreds,
+} from "@/lib/brokers/okx";
 
 export type SpotHolding = {
   coin: string;
@@ -43,7 +49,7 @@ export type SpotHolding = {
 };
 
 export type BrokerSpot = {
-  broker: "BITGET" | "BINANCE" | "MEXC";
+  broker: "BITGET" | "BINANCE" | "MEXC" | "OKX";
   /** Sum over ALL priced holdings ≥ $1 (listed + otherUsd bucket). */
   totalUsd: number;
   /** Priced holdings ≥ $1, sorted by value desc, capped at 10. */
@@ -69,7 +75,7 @@ export type FuturesSnapshot = {
 };
 
 export type BrokerPortfolio = {
-  broker: "BITGET" | "BINANCE" | "MEXC";
+  broker: "BITGET" | "BINANCE" | "MEXC" | "OKX";
   spot: BrokerSpot;
   futures: FuturesSnapshot;
 };
@@ -152,6 +158,33 @@ async function mexcTickerMap(): Promise<Map<string, number>> {
     for (const r of rows) {
       const p = Number(r.price);
       if (Number.isFinite(p) && p > 0) map.set(r.symbol.toUpperCase(), p);
+    }
+    return map;
+  });
+}
+
+async function okxTickerMap(): Promise<Map<string, number>> {
+  return cachedTickers("okx", async () => {
+    // OKX public spot tickers: instId "BTC-USDT" → normalise to "BTCUSDT".
+    const res = await fetch(
+      "https://www.okx.com/api/v5/market/tickers?instType=SPOT",
+      { signal: AbortSignal.timeout(10_000), cache: "no-store" },
+    );
+    if (!res.ok) {
+      throw new Error(`Không lấy được bảng giá OKX (HTTP ${res.status}).`);
+    }
+    const json = (await res.json()) as {
+      code?: string;
+      data?: Array<{ instId: string; last: string }>;
+    };
+    if (json.code && json.code !== "0") {
+      throw new Error(`Không lấy được bảng giá OKX (lỗi ${json.code}).`);
+    }
+    const map = new Map<string, number>();
+    for (const r of json.data ?? []) {
+      const p = Number(r.last);
+      const sym = r.instId.replace(/-/g, "").toUpperCase();
+      if (Number.isFinite(p) && p > 0) map.set(sym, p);
     }
     return map;
   });
@@ -339,6 +372,27 @@ async function fetchMexcSpot(creds: MexcCreds): Promise<BrokerSpot> {
   }
 }
 
+async function fetchOkxSpot(creds: OkxCreds): Promise<BrokerSpot> {
+  try {
+    const [rows, tickers] = await Promise.all([
+      getOkxSpotBalances(creds),
+      okxTickerMap(),
+    ]);
+    return {
+      broker: "OKX",
+      ...valueHoldings(
+        rows.map((r) => ({ coin: r.asset, total: r.total })),
+        tickers,
+      ),
+    };
+  } catch (e) {
+    if (e instanceof OkxError) {
+      return emptyBroker("OKX", e.toVietnamese());
+    }
+    return emptyBroker("OKX", errorText(e, "OKX"));
+  }
+}
+
 // ─── Futures side ───────────────────────────────────────────────────────
 
 async function fetchBitgetFutures(
@@ -399,6 +453,19 @@ async function fetchMexcFutures(creds: MexcCreds): Promise<FuturesSnapshot> {
   }
 }
 
+async function fetchOkxFutures(creds: OkxCreds): Promise<FuturesSnapshot> {
+  try {
+    // OKX is a unified account — equity/available stay 0 to avoid double
+    // counting the spot side; we surface the floating PnL only.
+    const b = await getOkxFuturesBalance(creds);
+    return { equity: b.equity, available: b.available, unrealizedPnl: b.unrealizedPnl };
+  } catch (e) {
+    const error =
+      e instanceof OkxError ? e.toVietnamese() : errorText(e, "OKX");
+    return { equity: 0, available: 0, unrealizedPnl: 0, error };
+  }
+}
+
 // ─── Entry point ────────────────────────────────────────────────────────
 
 /**
@@ -420,10 +487,11 @@ export async function getPortfolio(userId: string): Promise<Portfolio> {
   if (pending) return pending;
 
   const job = (async () => {
-    const [bitgetCreds, binanceCreds, mexcCreds] = await Promise.all([
+    const [bitgetCreds, binanceCreds, mexcCreds, okxCreds] = await Promise.all([
       loadCreds<BitgetCreds>(userId, "BITGET"),
       loadCreds<BinanceCreds>(userId, "BINANCE"),
       loadCreds<MexcCreds>(userId, "MEXC"),
+      loadCreds<OkxCreds>(userId, "OKX"),
     ]);
 
     const jobs: Promise<BrokerPortfolio>[] = [];
@@ -449,6 +517,14 @@ export async function getPortfolio(userId: string): Promise<Portfolio> {
           fetchMexcSpot(mexcCreds),
           fetchMexcFutures(mexcCreds),
         ]).then(([spot, futures]) => ({ broker: "MEXC" as const, spot, futures })),
+      );
+    }
+    if (okxCreds) {
+      jobs.push(
+        Promise.all([
+          fetchOkxSpot(okxCreds),
+          fetchOkxFutures(okxCreds),
+        ]).then(([spot, futures]) => ({ broker: "OKX" as const, spot, futures })),
       );
     }
 

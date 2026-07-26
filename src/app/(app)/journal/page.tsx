@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { Download, Plus } from "lucide-react";
+import { ChartColumn, Download, Plus } from "lucide-react";
 import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
 import { JournalClient } from "./journal-client";
@@ -14,6 +14,10 @@ export default function JournalPage() {
         actions={
           <>
             <TradingSystemsSheet />
+            <Button variant="outline" render={<Link href="/journal/systems" />}>
+              <ChartColumn className="size-4" />
+              Phân tích hệ thống
+            </Button>
             <Button variant="outline" render={<Link href="/journal/import" />}>
               <Download className="size-4" />
               Nhập từ MT4/MT5

@@ -12,7 +12,10 @@ import {
   CircleCheck,
   ExternalLink,
 } from "lucide-react";
+import Link from "next/link";
 import { EXCHANGE_LINKS, type Exchange } from "@/lib/brokers/referrals";
+import { BrokerLogo } from "@/components/broker-logo";
+import { cn } from "@/lib/utils";
 
 import {
   Card,
@@ -53,6 +56,128 @@ function RegisterCta({ exchange, label }: { exchange: Exchange; label: string })
       </span>
       <ExternalLink className="size-3.5 shrink-0 text-primary" />
     </a>
+  );
+}
+
+// ────────────────────────────────────────────────────────────────────
+// Connection overview strip + collapsible connect section
+// ────────────────────────────────────────────────────────────────────
+
+const SUMMARY_BROKERS = [
+  { key: "BITGET" as const, name: "Bitget", endpoint: "/api/brokers/bitget/keys" },
+  { key: "BINANCE" as const, name: "Binance", endpoint: "/api/brokers/binance/keys" },
+  { key: "MEXC" as const, name: "MEXC", endpoint: "/api/brokers/mexc/keys" },
+  { key: "OKX" as const, name: "OKX", endpoint: "/api/brokers/okx/keys" },
+];
+
+/**
+ * At-a-glance strip of which exchanges are linked — sits atop the broker grid
+ * so the connection state is obvious without scrolling the cards. Reads each
+ * broker's /keys status (light, DB-backed) in parallel. Read-only.
+ */
+export function BrokerConnectionSummary() {
+  const [state, setState] = React.useState<Record<string, boolean> | null>(
+    null,
+  );
+
+  React.useEffect(() => {
+    let alive = true;
+    Promise.all(
+      SUMMARY_BROKERS.map((b) =>
+        fetch(b.endpoint)
+          .then((r) => (r.ok ? r.json() : null))
+          .then(
+            (d: { connected?: boolean } | null) =>
+              [b.key, Boolean(d?.connected)] as const,
+          )
+          .catch(() => [b.key, false] as const),
+      ),
+    ).then((entries) => {
+      if (alive) setState(Object.fromEntries(entries));
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  const connectedCount = state
+    ? Object.values(state).filter(Boolean).length
+    : 0;
+
+  return (
+    <div className="flex flex-wrap items-center gap-2 rounded-xl border bg-card/40 px-4 py-3">
+      <span className="mr-1 text-sm text-muted-foreground">
+        {state === null
+          ? "Đang kiểm tra kết nối…"
+          : connectedCount === 0
+            ? "Chưa kết nối sàn nào — chọn một sàn bên dưới để bắt đầu."
+            : `Đã kết nối ${connectedCount}/4 sàn`}
+      </span>
+      {SUMMARY_BROKERS.map((b) => {
+        const connected = Boolean(state?.[b.key]);
+        return (
+          <span
+            key={b.key}
+            className={cn(
+              "inline-flex items-center gap-1.5 rounded-full py-1 pl-1 pr-2.5 text-xs transition-colors",
+              connected
+                ? "bg-bullish/10 text-bullish"
+                : "border border-dashed text-muted-foreground",
+            )}
+          >
+            <BrokerLogo broker={b.key} className="size-4 shrink-0" />
+            {b.name}
+            {connected ? <CircleCheck className="size-3" /> : null}
+          </span>
+        );
+      })}
+      {connectedCount > 0 ? (
+        <Link
+          href="/"
+          className="ml-auto text-xs font-medium text-primary hover:underline"
+        >
+          Xem Tổng tài sản →
+        </Link>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * Collapsible "connect via API key" section for a not-yet-connected broker.
+ * The referral CTA stays visible above it; the guide + key form hide behind
+ * one button so four un-linked cards don't stack into a wall. Opens straight
+ * away when the user is re-entering a key (editing an existing connection).
+ */
+function ConnectSection({
+  defaultOpen = false,
+  children,
+}: {
+  defaultOpen?: boolean;
+  children: React.ReactNode;
+}) {
+  const [open, setOpen] = React.useState(defaultOpen);
+  if (!open) {
+    return (
+      <Button variant="outline" size="sm" onClick={() => setOpen(true)}>
+        <Plug className="size-4" />
+        Kết nối bằng API key
+      </Button>
+    );
+  }
+  return (
+    <div className="space-y-4">
+      {children}
+      {!defaultOpen ? (
+        <button
+          type="button"
+          onClick={() => setOpen(false)}
+          className="text-xs text-muted-foreground hover:text-foreground"
+        >
+          Thu gọn
+        </button>
+      ) : null}
+    </div>
   );
 }
 
@@ -199,8 +324,8 @@ export function BitgetBrokerCard() {
         <div className="flex items-start justify-between gap-2">
           <div>
             <CardTitle className="flex items-center gap-2 text-base">
-              <PlugZap className="size-4 text-primary" />
-              Bitget Futures
+              <BrokerLogo broker="BITGET" className="size-5 shrink-0" />
+              Bitget
             </CardTitle>
             <CardDescription>
               USDT-M futures. Đọc số dư + vị thế (chỉ đọc) cho Tổng tài
@@ -280,15 +405,15 @@ export function BitgetBrokerCard() {
                     <span className="text-muted-foreground">PnL chưa chốt</span>
                     <span
                       className={`font-mono ${
-                        (account.balance.unrealizedPnl ?? 0) > 0
+                        ((account.balance.unrealizedPnl ?? 0) ?? 0) > 0
                           ? "text-bullish"
-                          : (account.balance.unrealizedPnl ?? 0) < 0
+                          : ((account.balance.unrealizedPnl ?? 0) ?? 0) < 0
                             ? "text-bearish"
                             : ""
                       }`}
                     >
-                      {(account.balance.unrealizedPnl ?? 0) >= 0 ? "+" : ""}
-                      {fmtNum(account.balance.unrealizedPnl)} {account.balance.marginCoin}
+                      {((account.balance.unrealizedPnl ?? 0) ?? 0) >= 0 ? "+" : ""}
+                      {fmtNum((account.balance.unrealizedPnl ?? 0))} {account.balance.marginCoin}
                     </span>
                   </div>
                   {account.positions.length > 0 ? (
@@ -363,7 +488,8 @@ export function BitgetBrokerCard() {
           </div>
         ) : (
           <>
-            <RegisterCta exchange="BITGET" label="Bitget" />
+            {!editing ? <RegisterCta exchange="BITGET" label="Bitget" /> : null}
+            <ConnectSection defaultOpen={editing}>
             <BitgetGuide />
             <Separator />
             <div className="space-y-3">
@@ -431,6 +557,7 @@ export function BitgetBrokerCard() {
                 </Button>
               ) : null}
             </div>
+            </ConnectSection>
           </>
         )}
       </CardContent>
@@ -456,7 +583,7 @@ type SpotMini = {
 function SpotMiniBlock({
   broker,
 }: {
-  broker: "BITGET" | "BINANCE" | "MEXC";
+  broker: "BITGET" | "BINANCE" | "MEXC" | "OKX";
 }) {
   // undefined = loading, null = not available (request failed)
   const [spot, setSpot] = React.useState<SpotMini | null | undefined>(
@@ -987,7 +1114,7 @@ export function BinanceBrokerCard() {
         toast.error(d.error ?? `Lỗi ${res.status}`);
         return;
       }
-      toast.success("Đã kết nối Binance Futures.");
+      toast.success("Đã kết nối Binance.");
       setApiKey("");
       setSecret("");
       setEditing(false);
@@ -1020,8 +1147,8 @@ export function BinanceBrokerCard() {
         <div className="flex items-start justify-between gap-2">
           <div>
             <CardTitle className="flex items-center gap-2 text-base">
-              <PlugZap className="size-4 text-primary" />
-              Binance Futures
+              <BrokerLogo broker="BINANCE" className="size-5 shrink-0" />
+              Binance
             </CardTitle>
             <CardDescription>
               USDT-M futures. Đọc số dư + vị thế (chỉ đọc) cho Tổng tài
@@ -1159,7 +1286,10 @@ export function BinanceBrokerCard() {
           </div>
         ) : (
           <>
-            <RegisterCta exchange="BINANCE" label="Binance" />
+            {!editing ? (
+              <RegisterCta exchange="BINANCE" label="Binance" />
+            ) : null}
+            <ConnectSection defaultOpen={editing}>
             <details className="rounded-md border bg-card/40 px-3 py-2 text-xs">
               <summary className="cursor-pointer font-medium">
                 Cách lấy API key Binance
@@ -1250,6 +1380,7 @@ export function BinanceBrokerCard() {
                 </Button>
               ) : null}
             </div>
+            </ConnectSection>
           </>
         )}
       </CardContent>
@@ -1364,7 +1495,7 @@ export function MexcBrokerCard() {
         <div className="flex items-start justify-between gap-2">
           <div>
             <CardTitle className="flex items-center gap-2 text-base">
-              <PlugZap className="size-4 text-primary" />
+              <BrokerLogo broker="MEXC" className="size-5 shrink-0" />
               MEXC
             </CardTitle>
             <CardDescription>
@@ -1508,7 +1639,8 @@ export function MexcBrokerCard() {
           </div>
         ) : (
           <>
-            <RegisterCta exchange="MEXC" label="MEXC" />
+            {!editing ? <RegisterCta exchange="MEXC" label="MEXC" /> : null}
+            <ConnectSection defaultOpen={editing}>
             <details className="rounded-md border bg-card/40 px-3 py-2 text-xs">
               <summary className="cursor-pointer font-medium">
                 Cách lấy API key MEXC
@@ -1596,6 +1728,363 @@ export function MexcBrokerCard() {
                 </Button>
               ) : null}
             </div>
+            </ConnectSection>
+          </>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+// ────────────────────────────────────────────────────────────────────
+// OKX card — unified account (spot + derivatives), 3 creds incl. passphrase
+// ────────────────────────────────────────────────────────────────────
+
+type OkxStatus = {
+  connected: boolean;
+  meta: { apiKeyMasked?: string; savedAt?: string } | null;
+};
+
+export function OkxBrokerCard() {
+  const [status, setStatus] = React.useState<OkxStatus | null>(null);
+  const [account, setAccount] = React.useState<BitgetAccount | null>(null);
+  const [accountError, setAccountError] = React.useState<string | null>(null);
+  const [accountLoading, setAccountLoading] = React.useState(false);
+  const [apiKey, setApiKey] = React.useState("");
+  const [secret, setSecret] = React.useState("");
+  const [passphrase, setPassphrase] = React.useState("");
+  const [showSecret, setShowSecret] = React.useState(false);
+  const [submitting, setSubmitting] = React.useState(false);
+  const [editing, setEditing] = React.useState(false);
+
+  React.useEffect(() => {
+    fetch("/api/brokers/okx/keys")
+      .then((r) => r.json())
+      .then((d: OkxStatus) => setStatus(d))
+      .catch(() => setStatus({ connected: false, meta: null }));
+  }, []);
+
+  const refreshAccount = React.useCallback(async () => {
+    setAccountLoading(true);
+    setAccountError(null);
+    try {
+      const res = await fetch("/api/brokers/okx/account");
+      const j = await res.json();
+      if (!res.ok) {
+        setAccountError(j?.error ?? `Lỗi ${res.status}`);
+        setAccount(null);
+        return;
+      }
+      setAccount(j as BitgetAccount);
+    } catch (e) {
+      setAccountError(e instanceof Error ? e.message : "Lỗi không xác định");
+    } finally {
+      setAccountLoading(false);
+    }
+  }, []);
+
+  React.useEffect(() => {
+    if (status?.connected && !editing) refreshAccount();
+    else {
+      setAccount(null);
+      setAccountError(null);
+    }
+  }, [status?.connected, editing, refreshAccount]);
+
+  const save = async () => {
+    if (!apiKey || !secret || !passphrase) {
+      toast.error("Cần nhập đủ API key, Secret và Passphrase.");
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const res = await fetch("/api/brokers/okx/keys", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ apiKey, secret, passphrase }),
+      });
+      const d = (await res.json()) as { ok?: boolean; error?: string };
+      if (!res.ok || !d.ok) {
+        toast.error(d.error ?? `Lỗi ${res.status}`);
+        return;
+      }
+      toast.success("Đã kết nối OKX.");
+      setApiKey("");
+      setSecret("");
+      setPassphrase("");
+      setEditing(false);
+      const next = await fetch("/api/brokers/okx/keys").then((r) => r.json());
+      setStatus(next as OkxStatus);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const disconnect = async () => {
+    if (!confirm("Gỡ kết nối OKX khỏi app này?")) return;
+    setSubmitting(true);
+    try {
+      const res = await fetch("/api/brokers/okx/keys", { method: "DELETE" });
+      if (!res.ok) {
+        toast.error("Không gỡ được kết nối.");
+        return;
+      }
+      toast.success("Đã gỡ kết nối OKX.");
+      setStatus({ connected: false, meta: null });
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex items-start justify-between gap-2">
+          <div>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <BrokerLogo broker="OKX" className="size-5 shrink-0" />
+              OKX
+            </CardTitle>
+            <CardDescription>
+              Tài khoản OKX hợp nhất (spot + phái sinh dùng chung số dư). Đọc số
+              dư + vị thế (chỉ đọc). App không bao giờ đặt lệnh.
+            </CardDescription>
+          </div>
+          {status?.connected ? (
+            <Badge
+              variant="outline"
+              className="border-bullish/40 bg-bullish/10 text-bullish"
+            >
+              <CircleCheck className="size-3" />
+              Đã kết nối
+            </Badge>
+          ) : null}
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {status?.connected && !editing ? (
+          <div className="space-y-3">
+            <div className="space-y-1.5 rounded-md border bg-card/40 p-3 text-sm">
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">API key</span>
+                <span className="font-mono text-xs">
+                  {status.meta?.apiKeyMasked ?? "—"}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Lưu lúc</span>
+                <span className="text-xs">
+                  {status.meta?.savedAt
+                    ? new Date(status.meta.savedAt).toLocaleString("vi-VN")
+                    : "—"}
+                </span>
+              </div>
+            </div>
+
+            <SpotMiniBlock broker="OKX" />
+
+            {/* Unified account → no separate futures wallet; show open
+                positions + their floating PnL only. */}
+            <div className="space-y-1.5 rounded-md border bg-card/40 p-3 text-sm">
+              <div className="flex items-center justify-between">
+                <span className="font-medium">Vị thế phái sinh</span>
+                <Button
+                  variant="ghost"
+                  size="xs"
+                  onClick={refreshAccount}
+                  disabled={accountLoading}
+                >
+                  {accountLoading ? (
+                    <Loader2 className="size-3 animate-spin" />
+                  ) : (
+                    "Làm mới"
+                  )}
+                </Button>
+              </div>
+              {accountError ? (
+                <p className="text-xs text-muted-foreground">
+                  Chưa đọc được vị thế — bỏ qua nếu bạn chỉ giữ spot. ({accountError})
+                </p>
+              ) : account ? (
+                account.positions.length > 0 ? (
+                  <>
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">Lãi/lỗ mở</span>
+                      <span
+                        className={`font-mono ${
+                          (account.balance.unrealizedPnl ?? 0) > 0
+                            ? "text-bullish"
+                            : (account.balance.unrealizedPnl ?? 0) < 0
+                              ? "text-bearish"
+                              : ""
+                        }`}
+                      >
+                        {(account.balance.unrealizedPnl ?? 0) >= 0 ? "+" : ""}
+                        {fmtNum((account.balance.unrealizedPnl ?? 0))} USD
+                      </span>
+                    </div>
+                    <ul className="mt-1 space-y-1 border-t pt-2">
+                      {account.positions.map((p) => (
+                        <li
+                          key={`${p.symbol}-${p.side}`}
+                          className="flex justify-between text-xs"
+                        >
+                          <span className="font-mono">
+                            {p.symbol}{" "}
+                            <Badge
+                              variant={p.side === "long" ? "default" : "destructive"}
+                              className="ml-1 text-[10px]"
+                            >
+                              {p.side.toUpperCase()} {p.leverage ?? "?"}x
+                            </Badge>
+                          </span>
+                          <span
+                            className={`font-mono ${
+                              (p.unrealizedPnl ?? 0) > 0
+                                ? "text-bullish"
+                                : (p.unrealizedPnl ?? 0) < 0
+                                  ? "text-bearish"
+                                  : ""
+                            }`}
+                          >
+                            {(p.unrealizedPnl ?? 0) >= 0 ? "+" : ""}
+                            {fmtNum(p.unrealizedPnl)}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  </>
+                ) : (
+                  <p className="text-xs text-muted-foreground">
+                    Chưa có vị thế phái sinh nào đang mở.
+                  </p>
+                )
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  {accountLoading ? "Đang tải…" : "—"}
+                </p>
+              )}
+            </div>
+
+            <div className="flex gap-2">
+              <Button variant="outline" size="sm" onClick={() => setEditing(true)}>
+                Đổi key
+              </Button>
+              <Button
+                variant="destructive"
+                size="sm"
+                onClick={disconnect}
+                disabled={submitting}
+              >
+                <Trash2 className="size-4" />
+                Gỡ kết nối
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <>
+            {!editing ? <RegisterCta exchange="OKX" label="OKX" /> : null}
+            <ConnectSection defaultOpen={editing}>
+            <details className="rounded-md border bg-card/40 px-3 py-2 text-xs">
+              <summary className="cursor-pointer font-medium">
+                Cách lấy API key OKX
+              </summary>
+              <ol className="ml-4 mt-2 list-decimal space-y-1 text-muted-foreground">
+                <li>
+                  Vào{" "}
+                  <a
+                    href={EXCHANGE_LINKS.OKX.apiKey}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-primary hover:underline"
+                  >
+                    OKX API Management
+                  </a>{" "}
+                  → Create API key.
+                </li>
+                <li>
+                  Permissions: chỉ tick <strong>Read</strong>. KHÔNG tick
+                  Trade/Withdraw — app chỉ đọc.
+                </li>
+                <li>
+                  Tự đặt <strong>Passphrase</strong> (bạn tự gõ khi tạo key —
+                  phải nhớ vì OKX không hiện lại).
+                </li>
+                <li>
+                  IP: để trống (Unrestricted) — key chỉ đọc không cần whitelist.
+                </li>
+                <li>
+                  Copy <strong>API Key</strong> + <strong>Secret Key</strong> +{" "}
+                  <strong>Passphrase</strong>.
+                </li>
+              </ol>
+            </details>
+            <div className="space-y-3">
+              <FormField label="API Key">
+                <Input
+                  autoComplete="off"
+                  value={apiKey}
+                  onChange={(e) => setApiKey(e.target.value)}
+                  placeholder="API Key từ OKX"
+                />
+              </FormField>
+              <FormField label="Secret Key">
+                <div className="relative">
+                  <Input
+                    autoComplete="off"
+                    type={showSecret ? "text" : "password"}
+                    value={secret}
+                    onChange={(e) => setSecret(e.target.value)}
+                    placeholder="Secret Key — chỉ hiện 1 lần khi tạo"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowSecret((v) => !v)}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                    aria-label={showSecret ? "Ẩn secret" : "Hiện secret"}
+                  >
+                    {showSecret ? (
+                      <EyeOff className="size-4" />
+                    ) : (
+                      <Eye className="size-4" />
+                    )}
+                  </button>
+                </div>
+              </FormField>
+              <FormField label="Passphrase" hint="Bạn tự đặt khi tạo API key">
+                <Input
+                  autoComplete="off"
+                  type="password"
+                  value={passphrase}
+                  onChange={(e) => setPassphrase(e.target.value)}
+                  placeholder="Passphrase của API key"
+                />
+              </FormField>
+            </div>
+            <div className="flex gap-2">
+              <Button onClick={save} disabled={submitting}>
+                {submitting ? (
+                  <Loader2 className="size-4 animate-spin" />
+                ) : (
+                  <Plug className="size-4" />
+                )}
+                Kết nối & lưu
+              </Button>
+              {editing ? (
+                <Button
+                  variant="ghost"
+                  onClick={() => {
+                    setEditing(false);
+                    setApiKey("");
+                    setSecret("");
+                    setPassphrase("");
+                  }}
+                >
+                  Huỷ
+                </Button>
+              ) : null}
+            </div>
+            </ConnectSection>
           </>
         )}
       </CardContent>
