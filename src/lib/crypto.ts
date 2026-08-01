@@ -38,7 +38,10 @@ export function decrypt(payload: string): string {
 export function maskSecret(value: string, visible = 4): string {
   if (!value) return "";
   if (value.length <= visible) return "•".repeat(value.length);
-  return `${"•".repeat(Math.max(4, value.length - visible))}${value.slice(
-    -visible,
-  )}`;
+  // Fixed-width mask: a short, constant run of dots + the last `visible`
+  // chars. Padding dots to the full key length made 64-char Binance keys
+  // overflow the (now narrower) broker cards. The tail is the part worth
+  // showing; the exact length isn't a secret worth conveying.
+  const dots = "•".repeat(Math.min(8, Math.max(4, value.length - visible)));
+  return `${dots}${value.slice(-visible)}`;
 }

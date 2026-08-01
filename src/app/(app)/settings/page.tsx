@@ -1,13 +1,7 @@
 import { PageHeader } from "@/components/page-header";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { auth, googleOnlyIntent } from "@/lib/auth";
+import { db } from "@/lib/db";
 import {
   BinanceBrokerCard,
   BitgetBrokerCard,
@@ -17,9 +11,17 @@ import {
   OkxBrokerCard,
   TelegramNotifyCard,
 } from "./brokers-client";
+import { AccountCard } from "./account-client";
 
 export default async function SettingsPage() {
   const session = await auth();
+  const userId = session?.user?.id;
+  const user = userId
+    ? await db.user.findUnique({
+        where: { id: userId },
+        select: { email: true, name: true, createdAt: true },
+      })
+    : null;
 
   return (
     <div className="mx-auto max-w-5xl">
@@ -48,24 +50,14 @@ export default async function SettingsPage() {
         </TabsContent>
 
         <TabsContent value="account" className="mt-4 space-y-4">
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base">Tài khoản</CardTitle>
-              <CardDescription>
-                Bạn đang đăng nhập với tài khoản cá nhân.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-2 text-sm">
-              <div className="flex justify-between border-b pb-2">
-                <span className="text-muted-foreground">Email</span>
-                <span className="font-medium">{session?.user?.email}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">User ID</span>
-                <span className="font-mono text-xs">{session?.user?.id}</span>
-              </div>
-            </CardContent>
-          </Card>
+          {user && userId ? (
+            <AccountCard
+              email={user.email}
+              name={user.name}
+              userId={userId}
+              joinedAt={user.createdAt.toISOString()}
+            />
+          ) : null}
           {/* No password to change when Google is the only login method. */}
           {googleOnlyIntent ? null : <ChangePasswordCard />}
 

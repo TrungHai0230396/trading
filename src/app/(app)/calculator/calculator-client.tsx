@@ -94,19 +94,47 @@ const INITIAL_STATE: FormState = {
 // Allow comma decimals (European style) in number inputs.
 const num = (s: string): number => Number(String(s).replace(",", "."));
 
+/** The params this form actually consumes. */
+const DEEP_LINK_KEYS = [
+  "market",
+  "symbol",
+  "riskAmount",
+  "stopMode",
+  "stopPips",
+  "entryPrice",
+  "stopPrice",
+  "takeProfit",
+  "takeProfitPrice",
+  "accountCurrency",
+] as const;
+
 /**
- * Build an initial state by overlaying URL-search-param values onto the
- * built-in defaults. Used when navigating in from the scanner analysis
- * page's "Tính lot" button.
+ * Did we arrive via a "Tính lot" deep link (vs. a plain visit)?
+ *
+ * Checked key-by-key on purpose: `params.size` is unsupported before Safari
+ * 17, where it reads `undefined` and would make every URL look like a plain
+ * visit — silently letting the saved form overwrite the deep-linked trade.
+ * Keying on our own params also means unrelated query strings (utm_*, auth
+ * callback leftovers) don't suppress the restore.
+ */
+function hasDeepLinkParams(params: URLSearchParams | null): boolean {
+  if (!params) return false;
+  return DEEP_LINK_KEYS.some((k) => params.get(k) !== null);
+}
+
+/**
+ * Build a state by overlaying URL-search-param values onto `base`. Used when
+ * navigating in from the scanner analysis page's "Tính lot" button.
  *
  * Only the params we explicitly handle make it through — anything else
  * is ignored to keep behavior predictable.
  */
 function stateFromSearchParams(
   params: URLSearchParams | null,
+  base: FormState = INITIAL_STATE,
 ): FormState {
-  if (!params) return INITIAL_STATE;
-  const next: FormState = { ...INITIAL_STATE };
+  if (!params) return base;
+  const next: FormState = { ...base };
   const market = params.get("market");
   if (market === "CRYPTO" || market === "FOREX") next.market = market;
   const symbol = params.get("symbol");
@@ -134,6 +162,56 @@ function stateFromSearchParams(
 }
 
 // ──────────────────────────────────────────────────────────────────────
+// Persistence — remember the user's inputs across reloads
+// ──────────────────────────────────────────────────────────────────────
+
+const STORAGE_KEY = "calculator.form.v1";
+
+/**
+ * Read the saved form back. Every field is validated against the current
+ * shape, so a stale or hand-edited entry degrades to the defaults instead
+ * of poisoning the form. Returns null when there's nothing usable.
+ */
+function loadSavedState(): FormState | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(STORAGE_KEY);
+    if (!raw) return null;
+    const saved = JSON.parse(raw) as Partial<Record<keyof FormState, unknown>>;
+    if (!saved || typeof saved !== "object") return null;
+
+    const next: FormState = { ...INITIAL_STATE };
+    if (saved.market === "FOREX" || saved.market === "CRYPTO")
+      next.market = saved.market;
+    if (saved.stopMode === "pips" || saved.stopMode === "price")
+      next.stopMode = saved.stopMode;
+    for (const key of [
+      "accountCurrency",
+      "symbol",
+      "riskAmount",
+      "stopPips",
+      "entryPrice",
+      "stopPrice",
+      "tpPrice",
+    ] as const) {
+      const v = saved[key];
+      if (typeof v === "string") next[key] = v;
+    }
+    return next;
+  } catch {
+    return null;
+  }
+}
+
+function saveState(state: FormState): void {
+  try {
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  } catch {
+    // Private mode / quota — persistence is a convenience, never fatal.
+  }
+}
+
+// ──────────────────────────────────────────────────────────────────────
 // Component
 // ──────────────────────────────────────────────────────────────────────
 export function CalculatorClient() {
@@ -146,6 +224,43 @@ export function CalculatorClient() {
   const [result, setResult] = React.useState<PositionResult | null>(null);
   const update = <K extends keyof FormState>(key: K, value: FormState[K]) =>
     setState((s) => ({ ...s, [key]: value }));
+
+  // Restore the last-used inputs on mount, so a reload doesn't wipe the
+  // form. Runs in an effect (not the useState initializer) because
+  // localStorage isn't available during SSR — reading it there would
+  // desync hydration. A deep-link from the scanner ("Tính lot") carries
+  // its own params and always wins over the saved form.
+  const [restored, setRestored] = React.useState(false);
+  React.useEffect(() => {
+    if (restored) return;
+    const saved = loadSavedState();
+    if (saved) {
+      if (hasDeepLinkParams(searchParams)) {
+        // The deep link owns the TRADE (symbol, entry, SL, TP) — never carry
+        // a previous symbol's prices into it. But it doesn't carry
+        // account-level preferences, so inherit those from the saved form
+        // rather than resetting the user to USD / the default risk size.
+        setState(
+          stateFromSearchParams(searchParams, {
+            ...INITIAL_STATE,
+            accountCurrency: saved.accountCurrency,
+            riskAmount: saved.riskAmount,
+          }),
+        );
+      } else {
+        setState(saved);
+      }
+    }
+    setRestored(true);
+  }, [searchParams, restored]);
+
+  // Persist on every change. Gated on `restored` (state, not a ref) so the
+  // very first render can't write the defaults over the saved form before
+  // the restore above has been applied.
+  React.useEffect(() => {
+    if (!restored) return;
+    saveState(state);
+  }, [state, restored]);
 
   const fetchPrice = useMutation({
     mutationFn: async () => {
@@ -217,6 +332,19 @@ export function CalculatorClient() {
     onError: (err) => toast.error(err instanceof Error ? err.message : "Lỗi"),
   });
 
+  // Reload used to be the de-facto "clear the form" gesture; now that inputs
+  // persist, give that back explicitly.
+  const resetForm = () => {
+    setState(INITIAL_STATE);
+    setResult(null);
+    try {
+      window.localStorage.removeItem(STORAGE_KEY);
+    } catch {
+      // ignore — nothing to clear
+    }
+    toast.success("Đã đặt lại thông số mặc định.");
+  };
+
   const onMarketChange = (m: string) => {
     const market = m as "FOREX" | "CRYPTO";
     setState({
@@ -240,14 +368,28 @@ export function CalculatorClient() {
     <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
       <Card>
         <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-base">
-            <Calculator className="size-4 text-primary" />
-            Thông số đầu vào
-          </CardTitle>
-          <CardDescription>
-            Nhập số tiền risk và stop loss để tính khối lượng lệnh ra lots và
-            units.
-          </CardDescription>
+          <div className="flex items-start justify-between gap-2">
+            <div>
+              <CardTitle className="flex items-center gap-2 text-base">
+                <Calculator className="size-4 text-primary" />
+                Thông số đầu vào
+              </CardTitle>
+              <CardDescription>
+                Nhập số tiền risk và stop loss để tính khối lượng lệnh ra lots
+                và units. App tự nhớ thông số bạn nhập cho lần sau.
+              </CardDescription>
+            </div>
+            <Button
+              variant="ghost"
+              size="xs"
+              className="shrink-0"
+              onClick={resetForm}
+              title="Xoá thông số đã nhớ, về mặc định"
+            >
+              <RefreshCw className="size-3.5" />
+              Đặt lại
+            </Button>
+          </div>
         </CardHeader>
 
         <CardContent className="space-y-4">
@@ -719,10 +861,17 @@ function CreateTradeButton({
     const safeLev = Math.max(1, Math.floor(result.leverage.safe));
     params.set("leverage", String(safeLev));
   }
-  params.set(
-    "setup",
-    `Tính từ Calculator: risk ${result.riskAmount}, ${result.market === "CRYPTO" ? `${lotSize} units` : `${lotSize} lots`}${result.leverage ? `, gợi ý ${result.leverage.rounded}x (an toàn ${Math.floor(result.leverage.safe)}x)` : ""}`,
-  );
+  // Carry a Calculator summary into the journal setup note ONLY for crypto —
+  // it holds the suggested leverage, which has no dedicated field. For forex,
+  // risk + lots already fill their own fields and "leverage" is meaningless
+  // (set once at account level by the broker), so leave the setup note empty
+  // for the user to write their own.
+  if (result.market === "CRYPTO") {
+    params.set(
+      "setup",
+      `Tính từ Calculator: risk ${result.riskAmount}, ${lotSize} units${result.leverage ? `, gợi ý ${result.leverage.rounded}x (an toàn ${Math.floor(result.leverage.safe)}x)` : ""}`,
+    );
+  }
 
   const disabled = !hasPriceMode || lotSize <= 0;
 
