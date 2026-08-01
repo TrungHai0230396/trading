@@ -1062,6 +1062,10 @@ export function BinanceBrokerCard() {
   const [showSecret, setShowSecret] = React.useState(false);
   const [submitting, setSubmitting] = React.useState(false);
   const [editing, setEditing] = React.useState(false);
+  // Connect failures must stay on screen: the fix lives on Binance's site
+  // (bật Enable Futures → tạo lại key), and a toast is long gone by the time
+  // the user comes back.
+  const [saveError, setSaveError] = React.useState<string | null>(null);
 
   React.useEffect(() => {
     fetch("/api/brokers/binance/keys")
@@ -1103,6 +1107,7 @@ export function BinanceBrokerCard() {
       return;
     }
     setSubmitting(true);
+    setSaveError(null);
     try {
       const res = await fetch("/api/brokers/binance/keys", {
         method: "POST",
@@ -1111,7 +1116,9 @@ export function BinanceBrokerCard() {
       });
       const d = (await res.json()) as { ok?: boolean; error?: string };
       if (!res.ok || !d.ok) {
-        toast.error(d.error ?? `Lỗi ${res.status}`);
+        const msg = d.error ?? `Lỗi ${res.status}`;
+        setSaveError(msg);
+        toast.error(msg);
         return;
       }
       toast.success("Đã kết nối Binance.");
@@ -1308,9 +1315,17 @@ export function BinanceBrokerCard() {
                   → Create API → System generated.
                 </li>
                 <li>
-                  Permissions: chỉ cần tick <strong>Enable Reading</strong> —
-                  đủ để đọc số dư/vị thế và nhập vị thế vào nhật ký. KHÔNG tick Enable
-                  Futures/Withdraw — app chỉ đọc, không bao giờ đặt lệnh.
+                  Permissions: tick <strong>Enable Reading</strong> <em>và</em>{" "}
+                  <strong>Enable Futures</strong>. App đọc ví + vị thế USDT-M
+                  Futures, mà Binance không có ô “chỉ đọc Futures” riêng — thiếu
+                  ô này thì mọi lần kết nối đều bị từ chối. Đây là quyền của{" "}
+                  <em>key</em>, không phải quyền của app: Nhật Ký Trade chỉ gọi
+                  endpoint đọc, không bao giờ đặt lệnh hộ bạn.
+                </li>
+                <li>
+                  KHÔNG tick <strong>Enable Withdrawals</strong> (rút tiền) hay{" "}
+                  <strong>Enable Spot &amp; Margin Trading</strong> — app không
+                  cần, và đây là hai quyền gây mất tiền thật nếu key bị lộ.
                 </li>
                 <li>
                   IP access: chọn <strong>Unrestricted</strong> — key chỉ đọc
@@ -1321,7 +1336,9 @@ export function BinanceBrokerCard() {
                   (secret chỉ hiện 1 lần).
                 </li>
                 <li>
-                  Tài khoản phải đã mở Futures (vào tab Futures kích hoạt 1 lần).
+                  Ô <strong>Enable Futures</strong> bị mờ? Tài khoản chưa mở
+                  Futures — vào tab Futures trên Binance kích hoạt 1 lần rồi tạo
+                  lại key.
                 </li>
               </ol>
             </details>
@@ -1358,6 +1375,21 @@ export function BinanceBrokerCard() {
                 </div>
               </FormField>
             </div>
+            {saveError ? (
+              <div className="space-y-1 rounded-md border border-rose-500/40 bg-rose-500/5 p-3 text-xs">
+                <p className="font-medium text-rose-500">
+                  Không kết nối được: {saveError}
+                </p>
+                <p className="text-muted-foreground">
+                  Kiểm tra theo thứ tự: (1) key đã tick{" "}
+                  <strong>Enable Futures</strong> chưa — app đọc ví USDT-M
+                  Futures nên bắt buộc phải có quyền này; (2) IP access để{" "}
+                  <strong>Unrestricted</strong>; (3) API Key/Secret dán đúng,
+                  không thừa dấu cách. Binance không cho thêm quyền Futures vào
+                  key cũ thì tạo key mới rồi dán lại.
+                </p>
+              </div>
+            ) : null}
             <div className="flex gap-2">
               <Button onClick={save} disabled={submitting}>
                 {submitting ? (
@@ -1374,6 +1406,7 @@ export function BinanceBrokerCard() {
                     setEditing(false);
                     setApiKey("");
                     setSecret("");
+                    setSaveError(null);
                   }}
                 >
                   Huỷ
@@ -2101,6 +2134,12 @@ type TgStatus = { enabled: boolean; connected: boolean };
 export function TelegramNotifyCard() {
   const [status, setStatus] = React.useState<TgStatus | null>(null);
   const [connecting, setConnecting] = React.useState(false);
+  // Deep link kept in state so there is always a tappable way into Telegram
+  // even when the popup never opened. Good for ~30 min (see telegram-link.ts).
+  const [connectUrl, setConnectUrl] = React.useState<string | null>(null);
+  // Persistent copy for the two outcomes a toast can't carry: popup blocked,
+  // and the wait timing out.
+  const [hint, setHint] = React.useState<string | null>(null);
   const pollTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const refresh = React.useCallback(async () => {
@@ -2125,6 +2164,7 @@ export function TelegramNotifyCard() {
 
   const connect = async () => {
     setConnecting(true);
+    setHint(null);
     try {
       const res = await fetch("/api/notify/telegram", { method: "POST" });
       const d = (await res.json().catch(() => null)) as {
@@ -2136,22 +2176,45 @@ export function TelegramNotifyCard() {
         setConnecting(false);
         return;
       }
-      // Open Telegram; the user presses Start there, the bot's long-poll
-      // loop binds their chat, then our status flips to connected.
-      window.open(d.url, "_blank", "noopener");
-      toast.info("Bấm Start trong Telegram để hoàn tất kết nối…");
+      // Render the link BEFORE trying to open it: window.open() runs after an
+      // await, so it is no longer tied to the tap that started this — mobile
+      // browsers block it as a popup and the fallback link is the only way in.
+      setConnectUrl(d.url);
+      // No "noopener" in the features string: with it, window.open() returns
+      // null even on success (per spec), which makes blocked popups
+      // undetectable. Null the opener by hand to keep the same protection.
+      const win = window.open(d.url, "_blank");
+      if (win) {
+        win.opener = null;
+        toast.info("Bấm Start trong Telegram để hoàn tất kết nối…");
+      } else {
+        setHint(
+          "Trình duyệt đã chặn mở tab Telegram. Bấm liên kết bên dưới để mở thủ công rồi bấm Start.",
+        );
+        toast.warning("Trình duyệt chặn mở Telegram — dùng liên kết bên dưới.");
+      }
 
       const startedAt = Date.now();
       const poll = async () => {
         const s = await refresh();
         if (s?.connected) {
           setConnecting(false);
+          setConnectUrl(null);
+          setHint(null);
           toast.success("Đã kết nối Telegram! 🎉");
           return;
         }
         if (Date.now() - startedAt > 3 * 60_000) {
+          // Stop polling, but never silently: the deep link is still valid,
+          // so say so instead of just dropping the spinner.
           setConnecting(false);
-          return; // give up quietly after 3 min
+          setHint(
+            "Đã chờ 3 phút mà chưa thấy bạn bấm Start. Liên kết bên dưới vẫn dùng được khoảng 30 phút — mở, bấm Start, rồi tải lại trang. Hoặc bấm “Kết nối Telegram” để lấy liên kết mới.",
+          );
+          toast.error(
+            "Chưa nhận được tín hiệu từ Telegram. Mở liên kết bên dưới rồi bấm Start.",
+          );
+          return;
         }
         pollTimer.current = setTimeout(poll, 2500);
       };
@@ -2236,6 +2299,26 @@ export function TelegramNotifyCard() {
               )}
               {connecting ? "Đang chờ bạn bấm Start…" : "Kết nối Telegram"}
             </Button>
+            {connectUrl ? (
+              <a
+                href={connectUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="flex items-center justify-between gap-2 rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-xs transition-colors hover:bg-primary/10"
+              >
+                <span className="text-muted-foreground">
+                  Telegram chưa mở?{" "}
+                  <strong className="text-primary">Mở thủ công</strong> rồi bấm
+                  Start.
+                </span>
+                <ExternalLink className="size-3.5 shrink-0 text-primary" />
+              </a>
+            ) : null}
+            {hint ? (
+              <p className="rounded-md border border-dashed p-3 text-xs text-muted-foreground">
+                {hint}
+              </p>
+            ) : null}
           </div>
         )}
       </CardContent>

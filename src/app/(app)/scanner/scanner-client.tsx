@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
+  AlertTriangle,
   Bell,
   BellRing,
   ExternalLink,
@@ -1360,6 +1361,47 @@ function SummaryRow({
   const tfMap = new Map<string, PerTimeframeResult>();
   for (const t of row.perTF) tfMap.set(t.timeframe, t);
 
+  // The runner records a failed candle fetch as signal NEUTRAL + an error
+  // string, so a symbol that never loaded still aggregates to score 50 /
+  // "Hỗn hợp" — visually identical to a coin we really did analyse. The
+  // input accepts free-typed symbols (BTCUSD, SOL/USD, PEPEUSDT.P), so
+  // this is easy to hit. Show it as missing data instead of a fake score,
+  // and put the reason on screen — the per-TF `title` is hover-only and
+  // therefore invisible on touch.
+  const failedTFs = row.perTF.filter((t) => t.error);
+  const allFailed =
+    row.perTF.length > 0 && failedTFs.length === row.perTF.length;
+  const failReason = failedTFs[0]?.error;
+
+  if (allFailed) {
+    return (
+      <TableRow className="bg-destructive/5 hover:bg-destructive/10">
+        <TableCell>
+          {/* No chart button and no follow bell: there is nothing to chart
+              and an alert on a symbol we can't fetch would never fire. */}
+          <span className="font-mono text-sm font-medium text-muted-foreground">
+            {row.symbol}
+          </span>
+        </TableCell>
+        <TableCell
+          colSpan={2 + timeframes.length}
+          className="whitespace-normal"
+        >
+          <div className="flex items-start gap-1.5 text-xs leading-relaxed text-destructive">
+            <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
+            <span>
+              <span className="font-medium">
+                Không lấy được dữ liệu — chưa chấm điểm.
+              </span>{" "}
+              {failReason ? `${failReason} ` : ""}
+              Kiểm tra lại tên symbol (đúng dạng BTCUSDT) rồi quét lại.
+            </span>
+          </div>
+        </TableCell>
+      </TableRow>
+    );
+  }
+
   const alignment: SignalLike =
     row.alignment === "BULLISH"
       ? "BULLISH"
@@ -1378,21 +1420,33 @@ function SummaryRow({
           {/* Follow ANY coin you scanned — not just the algo's Top-10 —
               so you can watch your own picks for consensus / break. */}
           {market === "CRYPTO" ? <FollowButton symbol={row.symbol} /> : null}
-          <button
-            type="button"
-            className="font-mono text-sm font-medium underline-offset-4 hover:underline"
-            onClick={() =>
-              onSelectChart({
-                symbol: row.symbol,
-                market,
-                timeframe: ALL_TIMEFRAMES.includes(timeframes[0] ?? "1h")
-                  ? (timeframes[0] ?? "1h")
-                  : DEFAULT_CHART_TIMEFRAME,
-              })
-            }
-          >
-            {row.symbol}
-          </button>
+          <div className="min-w-0">
+            <button
+              type="button"
+              className="font-mono text-sm font-medium underline-offset-4 hover:underline"
+              onClick={() =>
+                onSelectChart({
+                  symbol: row.symbol,
+                  market,
+                  timeframe: ALL_TIMEFRAMES.includes(timeframes[0] ?? "1h")
+                    ? (timeframes[0] ?? "1h")
+                    : DEFAULT_CHART_TIMEFRAME,
+                })
+              }
+            >
+              {row.symbol}
+            </button>
+            {failedTFs.length > 0 ? (
+              // Partial failure: the runner counts every failed timeframe
+              // as neutral, so the score next to it is diluted — say so
+              // instead of letting the number look complete.
+              <p className="max-w-[18rem] whitespace-normal text-[11px] leading-snug text-warning">
+                {failedTFs.length}/{row.perTF.length} khung lỗi (
+                {failedTFs.map((t) => t.timeframe).join(", ")}) — điểm chưa đầy
+                đủ. {failReason}
+              </p>
+            ) : null}
+          </div>
         </div>
       </TableCell>
       <TableCell>

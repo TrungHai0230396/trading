@@ -159,6 +159,7 @@ export async function PATCH(req: Request, { params }: RouteCtx) {
   }
 
   // Effective fields after merge.
+  const symbol = input.symbol ?? existing.symbol;
   const market: MarketType = input.market ?? (existing.market as MarketType);
   const direction: TradeDirection =
     input.direction ?? (existing.direction as TradeDirection);
@@ -181,13 +182,16 @@ export async function PATCH(req: Request, { params }: RouteCtx) {
         : 0;
 
   // Compute pnl: if user supplied pnl explicitly, take it. Else, if status is
-  // CLOSED + exitPrice is known, derive. Else keep existing.
+  // CLOSED + exitPrice is known, derive — that can come back null when the
+  // result is not expressible in USD, and null means "no P/L", not 0. Else
+  // keep existing.
   let pnl: number | null | undefined = undefined;
   if (input.pnl !== undefined) {
     pnl = input.pnl;
   } else if (status === "CLOSED" && exitPrice !== undefined) {
     pnl = derivePnl({
       market,
+      symbol,
       direction,
       entryPrice,
       exitPrice,

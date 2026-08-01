@@ -196,6 +196,13 @@ export function DashboardClient() {
   const ccy = dash.data?.currency ?? "USD";
   const positions = bitget.data?.positions ?? [];
 
+  // A failed /api/dashboard must never fall through to the empty states —
+  // "Chưa đủ lịch sử giao dịch" in front of 300 closed trades reads as data
+  // loss. Hard failure (nothing cached) gets an explicit error + retry;
+  // a failed refetch on top of good data only gets a "stale" note.
+  const dashFailed = dash.isError && dash.data === undefined;
+  const dashStale = dash.isError && dash.data !== undefined;
+
   // "Lệnh đang mở" merges journal OPEN entries with live positions so a
   // real position can never display as zero.
   const openDisplay =
@@ -253,17 +260,13 @@ export function DashboardClient() {
         />
       ) : portfolio.isError ? (
         <Card>
-          <CardContent className="flex min-h-[120px] flex-col items-center justify-center gap-2 py-6 text-center">
-            <p className="text-sm text-muted-foreground">
-              Không tải được tổng tài sản.
-            </p>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => void portfolio.refetch()}
-            >
-              Thử lại
-            </Button>
+          <CardContent className="py-6">
+            <LoadError
+              className="min-h-[120px]"
+              message="Không tải được tổng tài sản."
+              onRetry={() => void portfolio.refetch()}
+              retrying={portfolio.isFetching}
+            />
           </CardContent>
         </Card>
       ) : (
@@ -326,31 +329,52 @@ export function DashboardClient() {
       ) : null}
 
       {/* ── 3. Journal stat strip (one segmented container) ──────────── */}
-      <div className="grid grid-cols-1 divide-y divide-border/60 overflow-hidden rounded-xl border bg-card sm:grid-cols-3 sm:divide-x sm:divide-y-0">
-        {statCells.map((st) => (
-          <div key={st.label} className="px-4 py-3">
-            <div className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
-              {st.label}
-            </div>
-            {st.value === null ? (
-              <Skeleton className="mt-1 h-7 w-24" />
-            ) : (
-              <div
-                className={cn(
-                  "num mt-1 text-xl font-semibold",
-                  st.tone > 0 && "text-bullish",
-                  st.tone < 0 && "text-bearish",
-                )}
-              >
-                {st.value}
+      {dashStale ? (
+        <p className="text-[11px] text-amber-600 dark:text-amber-400">
+          Số liệu nhật ký là bản cũ ·{" "}
+          <button
+            type="button"
+            onClick={() => void dash.refetch()}
+            className="underline"
+          >
+            thử lại
+          </button>
+        </p>
+      ) : null}
+      {dashFailed ? (
+        <LoadError
+          className="rounded-xl border bg-card px-4 py-6"
+          message="Không tải được số liệu nhật ký."
+          onRetry={() => void dash.refetch()}
+          retrying={dash.isFetching}
+        />
+      ) : (
+        <div className="grid grid-cols-1 divide-y divide-border/60 overflow-hidden rounded-xl border bg-card sm:grid-cols-3 sm:divide-x sm:divide-y-0">
+          {statCells.map((st) => (
+            <div key={st.label} className="px-4 py-3">
+              <div className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                {st.label}
               </div>
-            )}
-            <div className="mt-0.5 text-[11px] text-muted-foreground/70">
-              {st.hint}
+              {st.value === null ? (
+                <Skeleton className="mt-1 h-7 w-24" />
+              ) : (
+                <div
+                  className={cn(
+                    "num mt-1 text-xl font-semibold",
+                    st.tone > 0 && "text-bullish",
+                    st.tone < 0 && "text-bearish",
+                  )}
+                >
+                  {st.value}
+                </div>
+              )}
+              <div className="mt-0.5 text-[11px] text-muted-foreground/70">
+                {st.hint}
+              </div>
             </div>
-          </div>
-        ))}
-      </div>
+          ))}
+        </div>
+      )}
 
       {/* ── 4. Chart + rail ──────────────────────────────────────────── */}
       <div className="grid items-start gap-4 lg:grid-cols-3">
@@ -367,6 +391,13 @@ export function DashboardClient() {
           <CardContent>
             {dash.isLoading ? (
               <Skeleton className="h-56 w-full" />
+            ) : dashFailed ? (
+              <LoadError
+                className="h-56 rounded-lg border border-dashed bg-card/40"
+                message="Không tải được đường equity."
+                onRetry={() => void dash.refetch()}
+                retrying={dash.isFetching}
+              />
             ) : (dash.data?.equitySeries.length ?? 0) < 2 ? (
               <EmptyState
                 className="h-56 min-h-0 py-6"
@@ -452,6 +483,19 @@ export function DashboardClient() {
                 {[0, 1, 2].map((i) => (
                   <Skeleton key={i} className="h-8 w-full" />
                 ))}
+              </CardContent>
+            </Card>
+          ) : dashFailed ? (
+            <Card size="sm">
+              <CardHeader>
+                <CardTitle>Quét gần nhất</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <LoadError
+                  message="Không tải được lần quét gần nhất."
+                  onRetry={() => void dash.refetch()}
+                  retrying={dash.isFetching}
+                />
               </CardContent>
             </Card>
           ) : dash.data?.latestRun && dash.data.latestRun.top.length > 0 ? (
@@ -562,6 +606,44 @@ export function DashboardClient() {
 // ──────────────────────────────────────────────────────────────────────
 // Hero
 // ──────────────────────────────────────────────────────────────────────
+
+/**
+ * The one "không tải được + Thử lại" block every panel uses. Kept shared so
+ * a broken panel always says so in the same words instead of quietly
+ * borrowing the empty state of a brand-new account.
+ */
+function LoadError({
+  message,
+  onRetry,
+  retrying = false,
+  className,
+}: {
+  message: string;
+  onRetry: () => void;
+  retrying?: boolean;
+  className?: string;
+}) {
+  return (
+    <div
+      className={cn(
+        "flex flex-col items-center justify-center gap-2 text-center",
+        className,
+      )}
+    >
+      <p className="text-sm text-muted-foreground">{message}</p>
+      {/* The retry stays visibly busy — on the flaky mobile network that
+          causes this state, a dead-feeling button gets tapped over and over. */}
+      <Button
+        variant="outline"
+        size="sm"
+        onClick={onRetry}
+        disabled={retrying}
+      >
+        {retrying ? "Đang tải…" : "Thử lại"}
+      </Button>
+    </div>
+  );
+}
 
 function HeroSkeleton() {
   return (

@@ -7,7 +7,8 @@
  *
  * Crypto prices come from Binance's public ticker (no key). Forex uses
  * TwelveData when a key is configured; symbols that fail are simply
- * omitted — the UI shows "—" rather than an error.
+ * omitted — the UI shows "—" rather than an error. Unrealized PnL is null
+ * (not 0) for instruments the app cannot value in USD.
  */
 
 import { NextResponse } from "next/server";
@@ -24,7 +25,8 @@ type LiveQuote = {
   tradeId: string;
   symbol: string;
   price: number;
-  unrealizedPnl: number;
+  /** USD. Null when the app cannot value the position in USD — see derivePnl. */
+  unrealizedPnl: number | null;
   /** 0..1 progress from entry toward SL (1 = at SL). Null without SL. */
   slProgress: number | null;
   /** 0..1 progress from entry toward TP (1 = at TP). Null without TP. */
@@ -101,10 +103,12 @@ export async function GET() {
     const tp = t.takeProfit !== null ? Number(t.takeProfit) : null;
     const lot = Number(t.lotSize);
 
-    // Reuse the app's own PnL math (handles forex pip conventions) by
-    // treating the live price as a hypothetical exit.
+    // Reuse the app's own PnL math (per-instrument contract sizes) by treating
+    // the live price as a hypothetical exit. Null when it cannot be valued in
+    // USD — emit the null so the UI shows "—" instead of a made-up figure.
     const unrealizedPnl = derivePnl({
       market: t.market,
+      symbol: t.symbol,
       direction: t.direction,
       entryPrice: entry,
       exitPrice: price,

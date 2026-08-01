@@ -62,9 +62,13 @@ export type CryptoInput = {
  * hits at half the liquidation distance — leverage halves.
  */
 export type LeverageSuggestion = {
-  /** entry / stopDistance — SL ≈ liquidation, lose 100% margin if SL hit. */
+  /** entry / stopDistance — at this leverage SL sits exactly at liquidation. */
   exact: number;
-  /** Whole-number ceiling of `exact` — what you'd actually type on an exchange. */
+  /**
+   * `exact` floored to a whole number — what you'd actually type on an
+   * exchange. Never rounded up: any leverage above `exact` drags liquidation
+   * INSIDE the stop, so the position is liquidated before the SL can fill.
+   */
   rounded: number;
   /** exact / 2 — recommended: SL = ~50% of margin loss, leaves a buffer. */
   safe: number;
@@ -139,8 +143,8 @@ function rrFromPrices(
  * Compute the leverage suggestion from notional + risk + entry/stop.
  * See LeverageSuggestion type for the math derivation.
  *
- *   exact      = entry / stopDistance        (margin = riskAmount, SL ≈ liq)
- *   rounded    = ceil(exact)                 (what you'd actually set)
+ *   exact      = entry / stopDistance        (margin = riskAmount, SL == liq)
+ *   rounded    = floor(exact)                (what you'd actually set)
  *   safe       = exact / 2                   (50% buffer)
  *   marginForExact = riskAmount
  *   marginForSafe  = riskAmount × 2
@@ -161,7 +165,11 @@ function computeLeverageSuggestion(
   if (!Number.isFinite(exact) || exact <= 0) return undefined;
   return {
     exact,
-    rounded: Math.max(1, Math.ceil(exact)),
+    // Floor, never ceil: rounding up puts liquidation closer than the stop,
+    // i.e. the trade is liquidated before the SL can trigger. Flooring only
+    // ever adds margin. The 1x clamp is the exchange minimum (and at 1x
+    // liquidation is effectively unreachable, so it stays on the safe side).
+    rounded: Math.max(1, Math.floor(exact)),
     safe: exact / 2,
     marginForExact: riskAmount,
     marginForSafe: riskAmount * 2,

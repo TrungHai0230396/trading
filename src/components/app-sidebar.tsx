@@ -18,6 +18,7 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
+  useSidebar,
 } from "@/components/ui/sidebar";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -30,7 +31,18 @@ function isActiveHref(pathname: string, href: string) {
 
 export function AppSidebar({ isAdmin = false }: { isAdmin?: boolean }) {
   const pathname = usePathname();
+  const { isMobile, setOpenMobile } = useSidebar();
   const { data: session } = useSession();
+
+  // On mobile the sidebar is a modal drawer sitting on top of the page: after
+  // navigating it stays open with focus trapped, so every tap looks like the
+  // app froze. Close it on click rather than on a pathname effect — tapping
+  // the item of the page you are already on leaves the pathname unchanged but
+  // still has to dismiss the drawer.
+  const closeOnMobile = React.useCallback(() => {
+    if (isMobile) setOpenMobile(false);
+  }, [isMobile, setOpenMobile]);
+
   const initials =
     session?.user?.name?.slice(0, 2).toUpperCase() ??
     session?.user?.email?.slice(0, 2).toUpperCase() ??
@@ -41,6 +53,7 @@ export function AppSidebar({ isAdmin = false }: { isAdmin?: boolean }) {
       <SidebarHeader>
         <Link
           href="/"
+          onClick={closeOnMobile}
           className="flex items-center gap-2 px-2 py-2 transition-opacity hover:opacity-80"
         >
           <div className="flex size-8 items-center justify-center rounded-md bg-primary text-primary-foreground shadow-sm">
@@ -69,7 +82,9 @@ export function AppSidebar({ isAdmin = false }: { isAdmin?: boolean }) {
                   return (
                     <SidebarMenuItem key={item.href}>
                       <SidebarMenuButton
-                        render={<Link href={item.href} />}
+                        render={
+                          <Link href={item.href} onClick={closeOnMobile} />
+                        }
                         isActive={active}
                         tooltip={item.label}
                       >
@@ -91,7 +106,7 @@ export function AppSidebar({ isAdmin = false }: { isAdmin?: boolean }) {
               <SidebarMenu>
                 <SidebarMenuItem>
                   <SidebarMenuButton
-                    render={<Link href="/admin" />}
+                    render={<Link href="/admin" onClick={closeOnMobile} />}
                     isActive={isActiveHref(pathname, "/admin")}
                     tooltip="Quản trị"
                   >

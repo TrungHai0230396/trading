@@ -6,7 +6,16 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { ArrowLeft, ChevronLeft, ChevronRight, Download, Save, Trash2, X } from "lucide-react";
+import {
+  AlertTriangle,
+  ArrowLeft,
+  ChevronLeft,
+  ChevronRight,
+  Download,
+  Save,
+  Trash2,
+  X,
+} from "lucide-react";
 
 import {
   Card,
@@ -282,6 +291,11 @@ export function TradeFormClient({
   const [editingCaptionId, setEditingCaptionId] = React.useState<string | null>(null);
   const [editingCaption, setEditingCaption] = React.useState("");
   const [editingKind, setEditingKind] = React.useState<"" | "before" | "during" | "after">("");
+  // Id of the screenshot waiting for delete confirmation — deleting is
+  // irreversible and the button sits on top of the image people tap to zoom.
+  const [pendingDeleteShotId, setPendingDeleteShotId] = React.useState<
+    string | null
+  >(null);
 
   const update = <K extends keyof FormState>(key: K, value: FormState[K]) =>
     setState((s) => ({ ...s, [key]: value }));
@@ -495,6 +509,25 @@ export function TradeFormClient({
     !empty(state.entryPrice) &&
     !empty(state.lotSize) &&
     !empty(state.openedAt);
+
+  // Closing a trade without a result stores pnl = null, and the stats read
+  // that as 0: the trade lands in the win-rate denominator without ever
+  // being a win, and drags down tổng P/L + Phân tích hệ thống. We never
+  // guess the number for the user, so warn instead.
+  const closedWithoutResult =
+    state.status === "CLOSED" && empty(state.exitPrice) && empty(state.pnl);
+
+  const saveNow = () => {
+    // The inline banner already flags this, but it sits far above the save
+    // button on mobile — repeat it the moment the trade actually gets saved.
+    if (closedWithoutResult) {
+      toast.warning(
+        "Lệnh đã đóng nhưng chưa có giá ra lẫn P/L — sẽ bị tính là lệnh thua (P/L = 0) cho tới khi bạn nhập số thật.",
+        { duration: 8000 },
+      );
+    }
+    submit.mutate();
+  };
 
   const canUpload = mode === "edit" && !!trade;
 
@@ -735,6 +768,18 @@ export function TradeFormClient({
               />
             </Field>
 
+            {closedWithoutResult ? (
+              <div className="flex items-start gap-2 rounded-md border border-warning/40 bg-warning/10 p-2.5 text-xs text-warning">
+                <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
+                <p>
+                  Trạng thái là “Đã đóng” nhưng chưa có giá ra lẫn P/L. Lưu như
+                  vậy thì lệnh bị tính P/L = 0, tức là một lệnh thua trong tỉ lệ
+                  thắng, tổng lãi/lỗ và Phân tích hệ thống — cho tới khi bạn
+                  nhập số thật từ sàn.
+                </p>
+              </div>
+            ) : null}
+
             <div className="grid grid-cols-2 gap-3">
               <Field label="Mở lúc *">
                 <Input
@@ -835,9 +880,10 @@ export function TradeFormClient({
           ) : (
             <>
               <div className="grid gap-3 lg:grid-cols-2">
-                <Field label="Dán ảnh nhanh">
+                <Field label="Dán ảnh nhanh" htmlFor="screenshot-paste">
                   <div className="flex flex-wrap items-center gap-2">
                     <Textarea
+                      id="screenshot-paste"
                       rows={2}
                       placeholder="Dán ảnh vào đây (Ctrl/Cmd + V)"
                       className="min-h-[38px] flex-1 resize-none text-xs"
@@ -845,7 +891,6 @@ export function TradeFormClient({
                       onChange={(e) => {
                         e.currentTarget.value = "";
                       }}
-                      aria-label="Dán ảnh vào đây"
                     />
                     <Button
                       type="button"
@@ -869,9 +914,10 @@ export function TradeFormClient({
                     />
                   </div>
                 </Field>
-                <Field label="Ảnh từ URL">
+                <Field label="Ảnh từ URL" htmlFor="screenshot-url">
                   <div className="flex gap-2">
                     <Input
+                      id="screenshot-url"
                       value={uploadUrl}
                       onChange={(e) => setUploadUrl(e.target.value)}
                       placeholder="https://... hoặc data:image/..."
@@ -967,10 +1013,13 @@ export function TradeFormClient({
                         />
                         <span className="absolute inset-0 bg-black/10 opacity-0 transition group-hover:opacity-100" />
                       </button>
+                      {/* Always visible on touch (no hover there, and the
+                          zoom target sits right underneath); fades in on
+                          hover/focus only where a real pointer exists. */}
                       <button
                         type="button"
-                        className="absolute right-2 top-2 rounded-full border bg-background/90 p-1 text-muted-foreground opacity-0 transition group-hover:opacity-100"
-                        onClick={() => deleteScreenshot.mutate(shot.id)}
+                        className="absolute right-2 top-2 z-10 rounded-full border bg-background/90 p-1 text-muted-foreground opacity-100 transition md:opacity-0 md:group-hover:opacity-100 md:focus-visible:opacity-100"
+                        onClick={() => setPendingDeleteShotId(shot.id)}
                         disabled={deleteScreenshot.isPending}
                         aria-label="Xoá ảnh"
                       >
@@ -1201,7 +1250,7 @@ export function TradeFormClient({
               setPendingSubmit(true);
               return;
             }
-            submit.mutate();
+            saveNow();
           }}
         >
           <Save className="size-4" />
@@ -1219,9 +1268,41 @@ export function TradeFormClient({
         missingCount={countUnmetRequired(systemState.systemChecks)}
         onConfirm={() => {
           setPendingSubmit(false);
-          submit.mutate();
+          saveNow();
         }}
       />
+
+      <Dialog
+        open={pendingDeleteShotId !== null}
+        onOpenChange={(open) => {
+          if (!open) setPendingDeleteShotId(null);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Xoá ảnh này?</DialogTitle>
+            <DialogDescription>
+              Ảnh sẽ bị xoá vĩnh viễn khỏi lệnh, không khôi phục được.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setPendingDeleteShotId(null)}>
+              Hủy
+            </Button>
+            <Button
+              variant="destructive"
+              disabled={deleteScreenshot.isPending}
+              onClick={() => {
+                const id = pendingDeleteShotId;
+                setPendingDeleteShotId(null);
+                if (id) deleteScreenshot.mutate(id);
+              }}
+            >
+              Xoá ảnh
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
     </div>
   );
@@ -1261,20 +1342,49 @@ function ChecklistWarnDialog({
   );
 }
 
+/** Props we hand to the control so the label can point at it. */
+type FieldControlProps = { id?: string; "aria-describedby"?: string };
+
 function Field({
   label,
   children,
   hint,
+  htmlFor,
 }: {
   label: string;
   children: React.ReactNode;
   hint?: string;
+  /**
+   * Only for rows whose child is a wrapper holding several controls — there
+   * is no single control to auto-wire, so the caller names one by id.
+   */
+  htmlFor?: string;
 }) {
+  const autoId = React.useId();
+  const hintId = hint ? `${autoId}-hint` : undefined;
+  // Nearly every field here renders one control as its only child, so handing
+  // it the generated id is enough to make <Label htmlFor> real. Without it the
+  // money inputs have no accessible name and tapping "Stop loss" focuses
+  // nothing — one field off is an expensive mistake when it's a price.
+  const autoWired =
+    htmlFor === undefined && React.isValidElement<FieldControlProps>(children)
+      ? React.cloneElement(children, {
+          id: autoId,
+          "aria-describedby": hintId,
+        })
+      : null;
+
   return (
     <div className="space-y-1.5">
-      <Label>{label}</Label>
-      {children}
-      {hint ? <p className="text-xs text-muted-foreground">{hint}</p> : null}
+      <Label htmlFor={htmlFor ?? (autoWired ? autoId : undefined)}>
+        {label}
+      </Label>
+      {autoWired ?? children}
+      {hint ? (
+        <p id={hintId} className="text-xs text-muted-foreground">
+          {hint}
+        </p>
+      ) : null}
     </div>
   );
 }

@@ -16,7 +16,6 @@ import {
 } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Select,
@@ -345,6 +344,21 @@ export function CalculatorClient() {
     toast.success("Đã đặt lại thông số mặc định.");
   };
 
+  /**
+   * Switching instrument clears every price-shaped field. Entry / SL / TP are
+   * prices of the pair you just left, so keeping them would quietly size a
+   * position against the wrong instrument. The pip distance survives (it's a
+   * distance, not a price), as do risk and currency.
+   */
+  const onSymbolChange = (symbol: string) => {
+    setState((s) =>
+      s.symbol === symbol
+        ? s
+        : { ...s, symbol, entryPrice: "", stopPrice: "", tpPrice: "" },
+    );
+    setResult(null);
+  };
+
   const onMarketChange = (m: string) => {
     const market = m as "FOREX" | "CRYPTO";
     setState({
@@ -424,7 +438,7 @@ export function CalculatorClient() {
                   <InstrumentCombobox
                     market="FOREX"
                     value={state.symbol}
-                    onChange={(v) => update("symbol", v)}
+                    onChange={onSymbolChange}
                   />
                 </Field>
               </div>
@@ -537,7 +551,7 @@ export function CalculatorClient() {
                   <InstrumentCombobox
                     market="CRYPTO"
                     value={state.symbol}
-                    onChange={(v) => update("symbol", v)}
+                    onChange={onSymbolChange}
                   />
                 </Field>
               </div>
@@ -620,6 +634,18 @@ export function CalculatorClient() {
 // Subcomponents
 // ──────────────────────────────────────────────────────────────────────
 
+/**
+ * Label + control. The control is rendered INSIDE the <label>, which is what
+ * associates the two — screen readers used to announce every money input as
+ * unlabelled and tapping the text didn't focus the field. Implicit
+ * association (rather than htmlFor + id) because the children here aren't all
+ * plain inputs: some are a Select trigger, a combobox, or an input paired with
+ * the "Live" button, and the browser just binds to the first labelable
+ * descendant in each case.
+ *
+ * The text sits in a <span> with the <Label> component's own classes — a
+ * <label> nested inside a <label> would be invalid markup.
+ */
 function Field({
   label,
   children,
@@ -628,10 +654,12 @@ function Field({
   children: React.ReactNode;
 }) {
   return (
-    <div className="space-y-1.5">
-      <Label>{label}</Label>
+    <label className="flex flex-col gap-1.5">
+      <span className="text-sm font-medium leading-none select-none">
+        {label}
+      </span>
       {children}
-    </div>
+    </label>
   );
 }
 
@@ -743,36 +771,12 @@ function ResultPanel({
         {result.leverage && result.market === "CRYPTO" ? (
           <>
             <Separator />
-            <div className="space-y-2 rounded-md border border-primary/30 bg-primary/5 p-3">
-              <div className="flex items-baseline justify-between">
-                <span className="text-xs font-medium text-muted-foreground">
-                  Đòn bẩy futures gợi ý
-                </span>
-                <span className="num text-2xl font-semibold leading-none text-primary">
-                  {result.leverage.rounded}x
-                </span>
-              </div>
-              <p className="text-[11px] leading-relaxed text-muted-foreground">
-                Đặt leverage <strong>{result.leverage.rounded}x</strong> với
-                margin ≈ <strong>{ccy} {fmt(result.leverage.marginForExact)}</strong>
-                {" "}thì SL ≈ giá thanh lý → nếu chạm SL mất 100% margin
-                (= đúng số risk).
-              </p>
-              <Separator />
-              <div className="flex items-baseline justify-between">
-                <span className="text-xs text-muted-foreground">
-                  An toàn (buffer 50%)
-                </span>
-                <span className="num text-sm font-medium">
-                  {fmt(result.leverage.safe, 1)}x · margin ≈ {ccy}{" "}
-                  {fmt(result.leverage.marginForSafe)}
-                </span>
-              </div>
-              <p className="text-[11px] leading-relaxed text-muted-foreground">
-                Halve leverage + double margin → SL chạm ở ~50% margin, còn dư
-                room trước thanh lý.
-              </p>
-            </div>
+            <LeverageCard
+              leverage={result.leverage}
+              notionalInAccount={result.notionalInAccount}
+              riskAmount={result.riskAmount}
+              accountCcy={ccy}
+            />
           </>
         ) : null}
 
@@ -798,6 +802,81 @@ function ResultPanel({
         <CreateTradeButton state={state} result={result} />
       </CardContent>
     </Card>
+  );
+}
+
+/**
+ * Đòn bẩy futures — crypto only. The headline is the SAFE number: a stop-out
+ * there only eats part of the margin, so a wick or a little slippage past SL
+ * doesn't liquidate the position. The floored `rounded` value comes second as
+ * the aggressive option — its margin barely covers the stop distance, so
+ * liquidation sits immediately behind SL.
+ *
+ * Margins are derived from the notional (margin = notional / leverage) instead
+ * of using marginForExact / marginForSafe: those two assume the un-floored
+ * leverage and so understate what the exchange actually locks up.
+ */
+function LeverageCard({
+  leverage,
+  notionalInAccount,
+  riskAmount,
+  accountCcy,
+}: {
+  leverage: NonNullable<PositionResult["leverage"]>;
+  notionalInAccount: number;
+  riskAmount: number;
+  accountCcy: string;
+}) {
+  const fmt = (n: number, dp = 2) =>
+    new Intl.NumberFormat("en-US", {
+      minimumFractionDigits: dp,
+      maximumFractionDigits: dp,
+    }).format(n);
+
+  // Exchanges only accept whole-number leverage. Floor for the same reason the
+  // calculator does — rounding up pulls liquidation inside the stop.
+  const safeLev = Math.max(1, Math.floor(leverage.safe));
+  const maxLev = Math.max(1, leverage.rounded);
+  const safeMargin = notionalInAccount / safeLev;
+  const maxMargin = notionalInAccount / maxLev;
+  // What a stop-out really costs at the safe leverage, as a share of margin.
+  const safeLossPct =
+    safeMargin > 0 ? Math.round((riskAmount / safeMargin) * 100) : null;
+
+  return (
+    <div className="space-y-2 rounded-md border border-primary/30 bg-primary/5 p-3">
+      <div className="flex items-baseline justify-between">
+        <span className="text-xs font-medium text-muted-foreground">
+          Đòn bẩy futures gợi ý (an toàn)
+        </span>
+        <span className="num text-2xl font-semibold leading-none text-primary">
+          {safeLev}x
+        </span>
+      </div>
+      <p className="text-[11px] leading-relaxed text-muted-foreground">
+        Đặt <strong>{safeLev}x</strong> với margin ≈{" "}
+        <strong>
+          {accountCcy} {fmt(safeMargin)}
+        </strong>
+        {safeLossPct != null
+          ? ` → chạm SL mất ~${safeLossPct}% margin, còn đệm trước giá thanh lý.`
+          : " → chạm SL chỉ mất một phần margin, còn đệm trước giá thanh lý."}
+      </p>
+      <Separator />
+      <div className="flex items-baseline justify-between">
+        <span className="text-xs text-muted-foreground">
+          Mạo hiểm — mức tối đa
+        </span>
+        <span className="num text-sm font-medium">
+          {maxLev}x · margin ≈ {accountCcy} {fmt(maxMargin)}
+        </span>
+      </div>
+      <p className="text-[11px] leading-relaxed text-muted-foreground">
+        Margin chỉ vừa đủ cho quãng SL: giá thanh lý gần như trùng SL. Phí,
+        funding hay mark price nhảy một nhịp là bị thanh lý trước khi SL kịp
+        khớp. Đừng đặt cao hơn mức này.
+      </p>
+    </div>
   );
 }
 
@@ -854,13 +933,14 @@ function CreateTradeButton({
     params.set("riskAmount", String(result.riskAmount));
   // Carry the suggested leverage for reference in the journal note
   // instead of falling back to the hardcoded default. Use the "safe"
-  // (50% buffer) value rather than rounded — rounded matches SL→liq
-  // exactly which is risky if Bitget mark price wicks past SL.
+  // (50% buffer) value rather than rounded — at `rounded` the liquidation
+  // price sits right behind SL, which a mark-price wick can reach first.
   // Always FLOOR — never round up; less leverage = more margin = safer.
-  if (result.leverage && result.market === "CRYPTO") {
-    const safeLev = Math.max(1, Math.floor(result.leverage.safe));
-    params.set("leverage", String(safeLev));
-  }
+  const safeLev =
+    result.leverage && result.market === "CRYPTO"
+      ? Math.max(1, Math.floor(result.leverage.safe))
+      : null;
+  if (safeLev != null) params.set("leverage", String(safeLev));
   // Carry a Calculator summary into the journal setup note ONLY for crypto —
   // it holds the suggested leverage, which has no dedicated field. For forex,
   // risk + lots already fill their own fields and "leverage" is meaningless
@@ -869,7 +949,7 @@ function CreateTradeButton({
   if (result.market === "CRYPTO") {
     params.set(
       "setup",
-      `Tính từ Calculator: risk ${result.riskAmount}, ${lotSize} units${result.leverage ? `, gợi ý ${result.leverage.rounded}x (an toàn ${Math.floor(result.leverage.safe)}x)` : ""}`,
+      `Tính từ Calculator: risk ${result.riskAmount}, ${lotSize} units${result.leverage && safeLev != null ? `, đòn bẩy ${safeLev}x (tối đa ${result.leverage.rounded}x)` : ""}`,
     );
   }
 

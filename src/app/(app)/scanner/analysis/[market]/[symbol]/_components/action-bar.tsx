@@ -111,14 +111,19 @@ export function ActionBar({
     >
       <div className="flex flex-wrap items-center gap-2">
         {/* Terminal action first — it was buried in the last slot while
-            "copy" (the least consequential button) held prime position. */}
+            "copy" (the least consequential button) held prime position.
+            The label must never read as "place this order": this is the
+            filled primary button sitting right under the Entry/SL/TP +
+            leverage card, and the app never trades. It only opens the
+            journal form with the plan prefilled. */}
         <Button
           size="sm"
           className="flex-1 md:flex-none"
           render={<Link href={journalHref} />}
+          title="Mở form Nhật ký với kế hoạch điền sẵn — app không đặt lệnh trên sàn"
         >
           <BookOpen className="size-4" />
-          Tạo lệnh
+          Ghi vào Nhật ký
         </Button>
         <Button
           variant="outline"
@@ -166,6 +171,14 @@ export function ActionBar({
           {copied ? "Đã copy" : "Sao chép"}
         </Button>
       </div>
+      {/* The card directly above this bar lists Entry / SL / TP1 / TP2 and
+          required leverage — it reads like an order ticket. Say plainly,
+          at the point of action, that nothing is sent to the exchange.
+          Mirrors the calculator's journal CTA. */}
+      <p className="mt-2 text-[11px] leading-snug text-muted-foreground">
+        App chỉ đọc dữ liệu sàn, không đặt lệnh hộ — bạn tự vào lệnh trên sàn
+        rồi ghi lại vào Nhật ký.
+      </p>
     </div>
   );
 }

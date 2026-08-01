@@ -98,7 +98,8 @@ type LiveQuote = {
   tradeId: string;
   symbol: string;
   price: number;
-  unrealizedPnl: number;
+  /** null when the instrument can't be valued in USD — see derivePnl. */
+  unrealizedPnl: number | null;
   slProgress: number | null;
   tpProgress: number | null;
   fetchedAt: string;
@@ -586,19 +587,24 @@ function TradeTable({
     );
   }
 
+  // Below lg the full 9-column table is ~680px inside a ~311px card, which
+  // pushed P/L / Trạng thái / R off-screen behind the (invisible) scroller
+  // that <Table> already provides. Rather than nest another one, the four
+  // columns that carry the money stay and the rest fold into them; tighter
+  // cell padding buys the last few px so nothing has to be scrolled to.
   return (
-    <Table>
+    <Table className="max-lg:[&_td]:px-1.5 max-lg:[&_th]:px-1.5 max-lg:[&_th]:text-xs">
       <TableHeader>
         <TableRow>
-          <TableHead>Thời gian mở</TableHead>
+          <TableHead className="max-lg:hidden">Thời gian mở</TableHead>
           <TableHead>Symbol</TableHead>
-          <TableHead>Hướng</TableHead>
+          <TableHead className="max-lg:hidden">Hướng</TableHead>
           <TableHead>Trạng thái</TableHead>
-          <TableHead className="text-right">Vào / Ra</TableHead>
-          <TableHead className="text-right">Lot</TableHead>
+          <TableHead className="text-right max-lg:hidden">Vào / Ra</TableHead>
+          <TableHead className="text-right max-lg:hidden">Lot</TableHead>
           <TableHead className="text-right">P/L ({currency})</TableHead>
           <TableHead className="text-right">R</TableHead>
-          <TableHead></TableHead>
+          <TableHead className="max-lg:hidden"></TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>
@@ -632,17 +638,38 @@ function TradeRow({
 
   return (
     <TableRow>
-      <TableCell className="text-sm">
+      <TableCell className="text-sm max-lg:hidden">
         <div>{format(opened, "yyyy-MM-dd HH:mm")}</div>
         <div className="text-xs text-muted-foreground">
           {formatDistanceToNow(opened, { addSuffix: true, locale: vi })}
         </div>
       </TableCell>
-      <TableCell>
-        <div className="font-mono text-sm font-medium">{trade.symbol}</div>
+      {/* Wraps instead of nowrap below lg: a long broker symbol would
+          otherwise widen the table and push P/L back off a phone screen. */}
+      <TableCell className="max-lg:whitespace-normal">
+        {/* Also the row's only link below lg, where the chevron is hidden. */}
+        <Link
+          href={`/journal/${trade.id}`}
+          className="block font-mono text-sm font-medium hover:underline max-lg:break-all"
+        >
+          {trade.symbol}
+        </Link>
         <div className="text-xs text-muted-foreground">{trade.market}</div>
+        {/* Hướng + Thời gian mở lose their columns below lg — fold them back
+            in so a phone row still says which way and when. */}
+        <div className="mt-0.5 text-[10px] text-muted-foreground lg:hidden">
+          <span
+            className={cn(
+              "font-medium",
+              isLong ? "text-bullish" : "text-bearish",
+            )}
+          >
+            {isLong ? "LONG" : "SHORT"}
+          </span>{" "}
+          · {format(opened, "dd/MM")}
+        </div>
       </TableCell>
-      <TableCell>
+      <TableCell className="max-lg:hidden">
         <Badge
           variant="outline"
           className={cn(
@@ -658,7 +685,7 @@ function TradeRow({
       <TableCell>
         <StatusBadge status={trade.status} />
       </TableCell>
-      <TableCell className="num text-right text-sm">
+      <TableCell className="num text-right text-sm max-lg:hidden">
         <div>{fmtNum(trade.entryPrice, 5)}</div>
         {trade.exitPrice !== null ? (
           <div className="text-xs text-muted-foreground">
@@ -672,7 +699,7 @@ function TradeRow({
           <div className="text-xs text-muted-foreground">—</div>
         )}
       </TableCell>
-      <TableCell className="num text-right text-sm">
+      <TableCell className="num text-right text-sm max-lg:hidden">
         {fmtNum(trade.lotSize, trade.market === "FOREX" ? 2 : 4)}
       </TableCell>
       <TableCell
@@ -689,6 +716,13 @@ function TradeRow({
           // tự nhập lãi/lỗ thật từ sàn khi lệnh đã đóng.
           "—"
         )}
+        {/* Without the Vào / Ra column an OPEN row would be nothing but "—"
+            below lg, so the live price rides along here instead. */}
+        {live ? (
+          <div className="text-[10px] font-normal text-info lg:hidden">
+            ▸ {fmtNum(live.price, 5)}
+          </div>
+        ) : null}
       </TableCell>
       <TableCell
         className={cn(
@@ -699,7 +733,7 @@ function TradeRow({
       >
         {trade.rMultiple === null ? "—" : `${trade.rMultiple.toFixed(2)}R`}
       </TableCell>
-      <TableCell className="text-right">
+      <TableCell className="text-right max-lg:hidden">
         <Button
           variant="ghost"
           size="icon-sm"

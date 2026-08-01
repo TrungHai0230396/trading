@@ -138,8 +138,10 @@ export async function POST(req: Request) {
     }
   }
 
-  // Compute derived values.
-  let pnl = input.pnl;
+  // Compute derived values. derivePnl returns null when it cannot express the
+  // result in USD (unknown/non-USD-quoted forex pair) — that null is stored as
+  // "no P/L", never as 0, and R-multiple stays null with it.
+  let pnl: number | null | undefined = input.pnl;
   if (
     pnl === undefined &&
     input.status === "CLOSED" &&
@@ -147,6 +149,7 @@ export async function POST(req: Request) {
   ) {
     pnl = derivePnl({
       market: input.market,
+      symbol: input.symbol,
       direction: input.direction,
       entryPrice: input.entryPrice,
       exitPrice: input.exitPrice,
@@ -154,7 +157,7 @@ export async function POST(req: Request) {
     });
   }
   const rMultiple =
-    pnl !== undefined && input.riskAmount > 0
+    pnl !== null && pnl !== undefined && input.riskAmount > 0
       ? deriveRMultiple(pnl, input.riskAmount)
       : null;
 

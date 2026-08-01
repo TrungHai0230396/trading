@@ -26,7 +26,15 @@ export function PageHeader({
           </p>
         ) : null}
       </div>
-      {actions ? <div className="flex items-center gap-2">{actions}</div> : null}
+      {/* Actions are shrink-0 buttons; on a 375px phone four of them (journal)
+          overflow and push the primary CTA off-screen, giving the whole
+          document a horizontal scrollbar. Wrap on mobile, keep the single
+          right-aligned row from sm up. */}
+      {actions ? (
+        <div className="flex flex-wrap items-center gap-2 sm:flex-nowrap sm:justify-end">
+          {actions}
+        </div>
+      ) : null}
     </div>
   );
 }
