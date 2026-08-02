@@ -132,7 +132,11 @@ async function binanceTickerMap(): Promise<Map<string, number>> {
       path: "/api/v3/ticker/price",
       ttlMs: 60_000,
       weight: BINANCE_WEIGHT.ticker24hAll,
-      priority: "background",
+      // Interactive (the default) on purpose: getPortfolio runs when a user
+      // opens the dashboard. Marking it "background" put a user-facing call
+      // ahead of the cron in the very lane built to protect the cron. The 60s
+      // memo above is shared across concurrent users, so the priority must not
+      // be plumbed from whichever caller happens to miss the cache either.
       timeoutMs: 10_000,
     });
     const map = new Map<string, number>();

@@ -117,6 +117,11 @@ export async function runConsensusScanForAllUsers(): Promise<void> {
             indicators: [DEFAULT_STRATEGY],
             limit: 300,
             persist: false,
+            // The one true background caller: this tick drives everyone's
+            // Telegram consensus alerts, and if it queues behind interactive
+            // traffic it runs long, the overlap guard swallows the next tick,
+            // and alerts stop firing with no error anywhere.
+            priority: "background",
           });
           // scanSymbol swallows a per-TF kline failure as a NEUTRAL entry
           // with `.error` set — which would drop bullishCount below the

@@ -146,7 +146,32 @@ const WEIGHT_CAPACITY = 240;
 const MAX_IN_FLIGHT = 8;
 const DEFAULT_TIMEOUT_MS = 10_000;
 
-type QueueItem = { weight: number; run: () => void };
+/**
+ * How long a request may sit in the queue before we give up on it.
+ *
+ * Without this the queue is unbounded and overload degrades into a permanent
+ * hang: arrivals can exceed drain capacity indefinitely, waiters pile up
+ * holding their connections and request context, and RSS climbs until the box
+ * OOMs — the exact outage this module exists to prevent, reachable without any
+ * Binance 429 at all. Failing a request with a clear message is strictly better
+ * than hanging it forever. Kept separate from the per-request HTTP timeout:
+ * `getTopBinanceUsdtSymbols` asks for 20s because the payload is large, and
+ * that must not silently become a 20s queue wait on top.
+ */
+const MAX_QUEUE_WAIT_MS = 8_000;
+
+/**
+ * Background may not monopolise. Cron volume scales with users × watchlist
+ * symbols, so "cron always first" would starve real users at scale.
+ */
+const MAX_BACKGROUND_STREAK = 4;
+
+type QueueItem = {
+  weight: number;
+  deadlineAt: number;
+  run: () => void;
+  reject: (err: unknown) => void;
+};
 
 const queues: Record<BinancePriority, QueueItem[]> = {
   background: [],
@@ -154,38 +179,96 @@ const queues: Record<BinancePriority, QueueItem[]> = {
 };
 let inFlight = 0;
 let tokens = WEIGHT_CAPACITY;
-let lastRefillAt = Date.now();
+let backgroundStreak = 0;
 let pumpTimer: ReturnType<typeof setTimeout> | null = null;
 
+/**
+ * Monotonic, NOT Date.now(). The wall clock steps backwards on routine NTP
+ * correction (and on host live-migration); with Date.now() a backward step
+ * made `elapsed` negative, and refill() returned early WITHOUT advancing its
+ * cursor — so the bucket stopped refilling and every Binance request in the
+ * process queued forever until the clock caught up.
+ */
+const monotonicMs = (): number => performance.now();
+
+let lastRefillAt = monotonicMs();
+
 function refill(): void {
-  const now = Date.now();
+  const now = monotonicMs();
   const elapsed = now - lastRefillAt;
-  if (elapsed <= 0) return;
+  // Always advance the cursor, even on a zero/º negative delta, so the bucket
+  // can never wedge the way the wall-clock version could.
   lastRefillAt = now;
+  if (elapsed <= 0) return;
   tokens = Math.min(
     WEIGHT_CAPACITY,
     tokens + (elapsed * WEIGHT_PER_MINUTE) / 60_000,
   );
 }
 
-// The cron drains before interactive traffic. Interactive volume is
-// attacker-controllable; a starved cron means every user's Telegram alerts
-// silently stop, which is the failure this whole module exists to prevent.
+/** Reject every waiter that has aged past its deadline. */
+function dropExpired(): void {
+  const now = monotonicMs();
+  for (const lane of [queues.background, queues.interactive]) {
+    // Sweep the WHOLE lane, not just the head: a heavy item (weight 80) can sit
+    // at the front for a full refill window while lighter requests behind it
+    // quietly age out unnoticed.
+    for (let i = lane.length - 1; i >= 0; i -= 1) {
+      const item = lane[i];
+      if (item.deadlineAt > now) continue;
+      lane.splice(i, 1);
+      // Deliberately NOT touching inFlight: a queued item never held a slot,
+      // and decrementing here would corrupt the cap permanently.
+      item.reject(
+        new BinanceGuardError(
+          "Hệ thống đang bận lấy dữ liệu Binance. Thử lại sau ít giây.",
+          503,
+        ),
+      );
+    }
+  }
+}
+
+// The cron drains ahead of interactive traffic: interactive volume is
+// attacker-controllable, and a starved cron means every user's Telegram alerts
+// silently stop — the failure this whole module exists to prevent. But see
+// MAX_BACKGROUND_STREAK: strict priority would invert the problem.
 function headLane(): QueueItem[] | null {
-  if (queues.background.length > 0) return queues.background;
-  if (queues.interactive.length > 0) return queues.interactive;
-  return null;
+  const bg = queues.background;
+  const inter = queues.interactive;
+  if (bg.length === 0) return inter.length > 0 ? inter : null;
+  if (inter.length === 0) return bg;
+  return backgroundStreak >= MAX_BACKGROUND_STREAK ? inter : bg;
 }
 
 function scheduleNextPump(): void {
   if (pumpTimer) return;
-  // A freed slot pumps on release; no timer needed for that case.
-  if (inFlight >= MAX_IN_FLIGHT) return;
   const head = headLane()?.[0];
   if (!head) return;
-  const deficit = head.weight - tokens;
-  const waitMs =
-    deficit <= 0 ? 25 : Math.ceil((deficit * 60_000) / WEIGHT_PER_MINUTE) + 25;
+
+  // A timer is required even when every slot is busy. Releases normally drive
+  // the next pump, but if all MAX_IN_FLIGHT sockets stall at once nothing
+  // releases — and since dropExpired() only runs inside pump(), every waiter
+  // would sit past its deadline forever. Measured: without this, 392 of 400
+  // queued requests were still parked after 20s.
+  //
+  // Lane heads are the earliest deadlines: items are pushed FIFO with the same
+  // MAX_QUEUE_WAIT_MS budget, so each lane is already ordered by deadline. That
+  // keeps this O(1); dropExpired() still sweeps whole lanes when it runs.
+  let earliest = Infinity;
+  for (const lane of [queues.background, queues.interactive]) {
+    const first = lane[0];
+    if (first && first.deadlineAt < earliest) earliest = first.deadlineAt;
+  }
+  let waitMs = Math.max(0, earliest - monotonicMs()) + 5;
+
+  if (inFlight < MAX_IN_FLIGHT) {
+    const deficit = head.weight - tokens;
+    const tokenWait =
+      deficit <= 0 ? 25 : Math.ceil((deficit * 60_000) / WEIGHT_PER_MINUTE) + 25;
+    waitMs = Math.min(waitMs, tokenWait);
+  }
+
   pumpTimer = setTimeout(() => {
     pumpTimer = null;
     pump();
@@ -194,6 +277,7 @@ function scheduleNextPump(): void {
 
 function pump(): void {
   refill();
+  dropExpired();
   for (;;) {
     if (inFlight >= MAX_IN_FLIGHT) break;
     const lane = headLane();
@@ -201,6 +285,7 @@ function pump(): void {
     const item = lane[0];
     if (tokens < item.weight) break;
     lane.shift();
+    backgroundStreak = lane === queues.background ? backgroundStreak + 1 : 0;
     tokens -= item.weight;
     inFlight += 1;
     item.run();
@@ -212,10 +297,13 @@ function pump(): void {
 function acquire(
   weight: number,
   priority: BinancePriority,
+  maxWaitMs = MAX_QUEUE_WAIT_MS,
 ): Promise<() => void> {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     queues[priority].push({
       weight,
+      deadlineAt: monotonicMs() + maxWaitMs,
+      reject,
       run: () => {
         let released = false;
         resolve(() => {

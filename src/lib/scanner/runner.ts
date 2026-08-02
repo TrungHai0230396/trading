@@ -10,6 +10,7 @@ import { db } from "@/lib/db";
 import { MarketType } from "@/generated/prisma";
 import { getTopBinanceUsdtSymbols } from "@/lib/quotes/binance";
 import { getCurated } from "@/lib/insights/curated";
+import type { BinancePriority } from "@/lib/net/binance-guard";
 import {
   getCandles,
   isTimeframe,
@@ -143,6 +144,13 @@ export async function scanSymbol(args: {
   indicators: StrategyId[];
   limit: number;
   persist: boolean;
+  /**
+   * Optional, defaults to interactive. Only the in-process cron passes
+   * "background" — it is the lane the guard drains first so a flood of user
+   * traffic can't stall the consensus tick and silently kill everyone's
+   * Telegram alerts. User-initiated scans must NOT set this.
+   */
+  priority?: BinancePriority;
 }): Promise<ScanSummaryEntry> {
   const perTF: PerTimeframeResult[] = [];
 
@@ -153,6 +161,7 @@ export async function scanSymbol(args: {
         symbol: args.symbol,
         timeframe: tf,
         limit: args.limit,
+        priority: args.priority,
       });
 
       const perStrategy = args.indicators.map((id) => {
