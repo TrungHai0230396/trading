@@ -1072,7 +1072,12 @@ export function TradeFormClient({
                     }
                   >
                     <SelectTrigger className="w-full">
-                      <SelectValue placeholder="Chọn loại" />
+                      {/* Base UI resolves a trigger label from the Root's
+                          `items` prop; with no items it prints the raw value
+                          ("before"). Map it explicitly instead. */}
+                      <SelectValue placeholder="Chọn loại">
+                        {(v) => screenshotKindLabel(v as string) ?? "Không phân loại"}
+                      </SelectValue>
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="">Không phân loại</SelectItem>
@@ -1156,7 +1161,9 @@ export function TradeFormClient({
                               }
                             >
                               <SelectTrigger className="w-full">
-                                <SelectValue placeholder="Chọn loại" />
+                                <SelectValue placeholder="Chọn loại">
+                                  {(v) => screenshotKindLabel(v as string) ?? "Không phân loại"}
+                                </SelectValue>
                               </SelectTrigger>
                               <SelectContent>
                                 <SelectItem value="">Không phân loại</SelectItem>
