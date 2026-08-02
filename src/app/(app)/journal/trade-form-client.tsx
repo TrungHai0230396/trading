@@ -88,6 +88,55 @@ type FormState = {
 
 type ScreenshotItem = TradeDetail["screenshots"][number];
 
+type ScreenshotPayload = {
+  url: string;
+  caption?: string;
+  kind?: "before" | "during" | "after" | null;
+};
+
+/**
+ * Screenshots live at /api/journal/{id}/screenshots, so a trade being created
+ * has nowhere to put them yet. Rather than making the user save, navigate back
+ * and attach separately — traders screenshot their setup *as* they enter —
+ * "new" mode stages images in memory under a synthetic id and flushes them the
+ * moment the save returns a real trade id. Anything carrying this prefix has
+ * never touched the server, so delete/caption edits for it stay local.
+ */
+const PENDING_PREFIX = "pending:";
+const isPendingShot = (id: string) => id.startsWith(PENDING_PREFIX);
+
+/**
+ * Flush staged images onto a freshly created trade. Returns how many failed so
+ * the caller can tell the user precisely what to redo — the trade is already
+ * saved at this point, so a failure here must never look like the save failed.
+ *
+ * Sequential on purpose: these are base64 data URLs up to 4MB each, and firing
+ * them in parallel from a phone is how you end up with a half-uploaded set.
+ */
+async function uploadStagedScreenshots(
+  tradeId: string,
+  staged: ScreenshotItem[],
+): Promise<number> {
+  let failed = 0;
+  for (const shot of staged) {
+    try {
+      const res = await fetch(`/api/journal/${tradeId}/screenshots`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          url: shot.url,
+          caption: shot.caption ?? undefined,
+          kind: shot.kind ?? null,
+        }),
+      });
+      if (!res.ok) failed += 1;
+    } catch {
+      failed += 1;
+    }
+  }
+  return failed;
+}
+
 const MAX_SCREENSHOT_BYTES = 4 * 1024 * 1024; // 4MB
 const SCREENSHOT_KINDS = ["before", "during", "after"] as const;
 
@@ -239,6 +288,9 @@ export function TradeFormClient({
   const [screenshots, setScreenshots] = React.useState<ScreenshotItem[]>(
     trade?.screenshots ?? [],
   );
+  // Counter for staged-screenshot ids (see PENDING_PREFIX). A ref, not state:
+  // bumping it must never trigger a render.
+  const pendingSeq = React.useRef(0);
   const [systemState, setSystemState] = React.useState<TradingSystemCardState>(
     () => ({
       tradingSystemId: trade?.tradingSystemId ?? null,
@@ -355,14 +407,39 @@ export function TradeFormClient({
       if (!res.ok) throw new Error(data?.error ?? "Lưu thất bại");
       return data as { id: string };
     },
-    onSuccess: (data) => {
-      toast.success(mode === "new" ? "Đã tạo lệnh" : "Đã cập nhật");
+    onSuccess: async (data) => {
       queryClient.invalidateQueries({ queryKey: ["journal"] });
-      if (mode === "new") {
-        router.push(`/journal/${data.id}`);
-      } else {
+      if (mode !== "new") {
+        toast.success("Đã cập nhật");
         router.refresh();
+        return;
       }
+
+      // The trade exists now, so the staged images finally have somewhere to
+      // go. Upload them BEFORE navigating: the detail page reads screenshots
+      // server-side, and landing there mid-flush would show a trade that looks
+      // like it lost the images.
+      const staged = screenshots.filter((s) => isPendingShot(s.id));
+      if (staged.length === 0) {
+        toast.success("Đã tạo lệnh");
+        router.push(`/journal/${data.id}`);
+        return;
+      }
+
+      const failed = await uploadStagedScreenshots(data.id, staged);
+      if (failed === 0) {
+        toast.success(
+          `Đã tạo lệnh kèm ${staged.length} ảnh`,
+        );
+      } else {
+        // Never let a partial result read as total success or total failure —
+        // the trade IS saved, and the user needs to know exactly what to redo.
+        toast.error(
+          `Đã lưu lệnh, nhưng ${failed}/${staged.length} ảnh chưa tải lên được. Mở lệnh và thêm lại ảnh đó.`,
+          { duration: 10000 },
+        );
+      }
+      router.push(`/journal/${data.id}`);
     },
     onError: (err) => {
       toast.error(err instanceof Error ? err.message : "Lỗi");
@@ -388,11 +465,7 @@ export function TradeFormClient({
   });
 
   const createScreenshot = useMutation({
-    mutationFn: async (payload: {
-      url: string;
-      caption?: string;
-      kind?: "before" | "during" | "after" | null;
-    }) => {
+    mutationFn: async (payload: ScreenshotPayload) => {
       if (!trade) throw new Error("Cần lưu lệnh trước khi thêm ảnh");
       const res = await fetch(`/api/journal/${trade.id}/screenshots`, {
         method: "POST",
@@ -416,8 +489,40 @@ export function TradeFormClient({
     },
   });
 
+  /**
+   * Single entry point for "user picked an image". On an existing trade it
+   * uploads immediately; while creating one it stages the image locally and
+   * the save flushes it (see submit's onSuccess).
+   */
+  const addScreenshot = React.useCallback(
+    (payload: ScreenshotPayload) => {
+      if (trade) {
+        createScreenshot.mutate(payload);
+        return;
+      }
+      setScreenshots((prev) => [
+        ...prev,
+        {
+          id: `${PENDING_PREFIX}${pendingSeq.current++}`,
+          url: payload.url,
+          caption: payload.caption ?? null,
+          kind: payload.kind ?? null,
+          createdAt: new Date().toISOString(),
+        },
+      ]);
+      setUploadUrl("");
+      setUploadCaption("");
+      setUploadKind("");
+      setFileInputKey((k) => k + 1);
+      toast.success("Đã thêm ảnh — sẽ tải lên khi bạn lưu lệnh.");
+    },
+    [trade, createScreenshot],
+  );
+
   const deleteScreenshot = useMutation({
     mutationFn: async (id: string) => {
+      // Staged image: it only ever existed in this form, so drop it locally.
+      if (isPendingShot(id)) return id;
       if (!trade) throw new Error("Không tìm thấy lệnh");
       const res = await fetch(`/api/journal/${trade.id}/screenshots/${id}`, {
         method: "DELETE",
@@ -445,6 +550,10 @@ export function TradeFormClient({
       caption: string;
       kind: "" | "before" | "during" | "after";
     }) => {
+      // Staged image: edit it in place; it gets its caption on flush.
+      if (isPendingShot(id)) {
+        return { id, caption: caption || null, kind: kind || null } as ScreenshotItem;
+      }
       if (!trade) throw new Error("Không tìm thấy lệnh");
       const res = await fetch(`/api/journal/${trade.id}/screenshots/${id}`, {
         method: "PATCH",
@@ -490,7 +599,7 @@ export function TradeFormClient({
           toast.error("Không đọc được ảnh");
           return;
         }
-        createScreenshot.mutate({
+        addScreenshot({
           url,
           caption: uploadCaption.trim() || undefined,
           kind: uploadKind || null,
@@ -529,7 +638,8 @@ export function TradeFormClient({
     submit.mutate();
   };
 
-  const canUpload = mode === "edit" && !!trade;
+  // Also true while creating: images are staged now and uploaded on save.
+  const canUpload = mode === "new" || !!trade;
 
   const handlePaste = React.useCallback(
     (event: React.ClipboardEvent<HTMLElement>) => {
@@ -879,6 +989,12 @@ export function TradeFormClient({
             </div>
           ) : (
             <>
+              {mode === "new" ? (
+                <p className="rounded-md border border-dashed p-2.5 text-xs text-muted-foreground">
+                  Ảnh bạn thêm ở đây sẽ được tải lên ngay sau khi bấm{" "}
+                  <strong>Lưu lệnh</strong>.
+                </p>
+              ) : null}
               <div className="grid gap-3 lg:grid-cols-2">
                 <Field label="Dán ảnh nhanh" htmlFor="screenshot-paste">
                   <div className="flex flex-wrap items-center gap-2">
@@ -928,7 +1044,7 @@ export function TradeFormClient({
                       variant="outline"
                       disabled={!uploadUrl.trim() || createScreenshot.isPending}
                       onClick={() =>
-                        createScreenshot.mutate({
+                        addScreenshot({
                           url: uploadUrl.trim(),
                           caption: uploadCaption.trim() || undefined,
                           kind: uploadKind || null,

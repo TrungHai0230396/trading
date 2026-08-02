@@ -16,6 +16,7 @@
 
 import {
   classifyMarket,
+  MAX_TRADES_PER_FILE,
   parseMtDate,
   parseNumberCell,
   rowCells,
@@ -57,14 +58,27 @@ const SKIP_TYPES = new Set([
   "correction",
 ]);
 
-export function parseMt4Html(html: string): { trades: ParsedTrade[]; skipped: number } {
+export function parseMt4Html(html: string): {
+  trades: ParsedTrade[];
+  skipped: number;
+  truncated: boolean;
+} {
   const trades: ParsedTrade[] = [];
   let skipped = 0;
 
   const section = sliceClosedSection(html);
-  const rows = splitRows(section);
+  const { rows, truncated: rowsTruncated } = splitRows(section);
+  let truncated = rowsTruncated;
 
   for (const rowInner of rows) {
+    // Stop before the report can grow the response (and the commit step)
+    // without bound; the caller tells the user rather than importing a
+    // silent half of their history.
+    if (trades.length >= MAX_TRADES_PER_FILE) {
+      truncated = true;
+      break;
+    }
+
     const cells = rowCells(rowInner);
     if (cells.length < 14) continue; // headers / sub-totals / captions
 
@@ -135,5 +149,5 @@ export function parseMt4Html(html: string): { trades: ParsedTrade[]; skipped: nu
     });
   }
 
-  return { trades, skipped };
+  return { trades, skipped, truncated };
 }

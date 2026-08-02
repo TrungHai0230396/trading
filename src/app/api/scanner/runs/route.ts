@@ -15,6 +15,58 @@ const MAX_RUNS_PER_HOUR = 10;
 // backup growth even under sustained (rate-limited) use.
 const RUN_RETENTION_PER_USER = 100;
 
+// ─── In-flight guard ────────────────────────────────────────────────────
+// MAX_RUNS_PER_HOUR is counted when a request ARRIVES, so it is blind to
+// runs that are still executing: a user can fire all ten allowances at the
+// same instant and each one fans out thousands of uncached Binance calls.
+// Every outbound call leaves from the SAME server IP, so that burst can get
+// us rate-limited (or banned) upstream — which breaks prices, portfolio,
+// live journal quotes and the shared consensus alerts for EVERY user — and
+// pegs the event loop of our single Node process on top of it.
+//
+// Hence: one run per user at a time, plus a small ceiling across all users
+// so a handful of accounts can't coordinate the very same burst. Both are
+// admission checks on a heavy endpoint, not a shared upstream budget — a
+// blocked caller is told to retry, nothing else is starved.
+const MAX_CONCURRENT_RUNS = 3;
+// Safety net for a slot whose `finally` never ran (stream aborted before
+// it started, the process wedged mid-run, an unexpected throw). Without it
+// one leaked entry would lock that user out of scanning until the next
+// deploy. Well above the slowest real scan (~1-2 min for the 100-symbol
+// consensus universe × 7 timeframes at CONCURRENCY 5).
+const RUN_SLOT_TTL_MS = 10 * 60_000;
+
+// userId → epoch ms the run started. Bounded by MAX_CONCURRENT_RUNS plus
+// however many stale entries the TTL has yet to reclaim, so it stays tiny.
+const runningScans = new Map<string, number>();
+
+type SlotGrant =
+  | { ok: true; startedAt: number }
+  | { ok: false; reason: "USER_BUSY" | "SYSTEM_BUSY" };
+
+// Check and set happen with no `await` in between, so two concurrent
+// requests can never both win a slot on this single-threaded runtime.
+function acquireRunSlot(userId: string): SlotGrant {
+  const now = Date.now();
+  for (const [uid, startedAt] of runningScans) {
+    if (now - startedAt > RUN_SLOT_TTL_MS) runningScans.delete(uid);
+  }
+
+  if (runningScans.has(userId)) return { ok: false, reason: "USER_BUSY" };
+  if (runningScans.size >= MAX_CONCURRENT_RUNS) {
+    return { ok: false, reason: "SYSTEM_BUSY" };
+  }
+
+  runningScans.set(userId, now);
+  return { ok: true, startedAt: now };
+}
+
+function releaseRunSlot(userId: string, startedAt: number): void {
+  // Release only OUR entry: a run that outlived RUN_SLOT_TTL_MS was already
+  // reclaimed and the user may hold a newer slot we must not free.
+  if (runningScans.get(userId) === startedAt) runningScans.delete(userId);
+}
+
 const requestSchema = z
   .object({
     // Crypto-only scanner — forex removed (shared TwelveData key can't
@@ -70,13 +122,37 @@ export async function POST(req: Request) {
     );
   }
 
+  const userId = session.user.id;
+  const input = parsed.data;
+
+  // Taken here — before the Response is returned — because the scan itself
+  // only starts once the stream below is pulled; checking any later would
+  // leave the burst window wide open.
+  const slot = acquireRunSlot(userId);
+  if (!slot.ok) {
+    return slot.reason === "USER_BUSY"
+      ? NextResponse.json(
+          {
+            error:
+              "Bạn đang có một lượt quét chạy dở. Đợi lượt đó xong rồi quét tiếp nhé.",
+          },
+          { status: 409 },
+        )
+      : NextResponse.json(
+          {
+            error:
+              "Hệ thống đang bận xử lý các lượt quét khác. Thử lại sau ít phút.",
+          },
+          { status: 503 },
+        );
+  }
+  const slotStartedAt = slot.startedAt;
+
   // Stream progress + result as NDJSON. Each line is a separate JSON
   // object the client can parse incrementally:
   //   {"type":"progress","phase":"CONSENSUS","done":47,"total":100}
   //   {"type":"result","data":{...}}
   //   {"type":"error","error":"..."}
-  const userId = session.user.id;
-  const input = parsed.data;
   const encoder = new TextEncoder();
 
   const stream = new ReadableStream<Uint8Array>({
@@ -142,6 +218,10 @@ export async function POST(req: Request) {
         const msg = err instanceof Error ? err.message : "Lỗi không xác định";
         send({ type: "error", error: msg });
       } finally {
+        // Release FIRST: on a client disconnect `controller.close()` throws
+        // (the controller is already closed), and a throw here would strand
+        // the slot and lock this user out of scanning for the whole TTL.
+        releaseRunSlot(userId, slotStartedAt);
         closed = true;
         controller.close();
       }

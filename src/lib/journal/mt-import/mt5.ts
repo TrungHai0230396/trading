@@ -12,6 +12,7 @@
 
 import {
   classifyMarket,
+  MAX_TRADES_PER_FILE,
   parseMtDate,
   parseNumberCell,
   rowCells,
@@ -34,14 +35,25 @@ function slicePositionsSection(html: string): string {
   return stop > 30 ? slice.slice(0, stop) : slice;
 }
 
-export function parseMt5Html(html: string): { trades: ParsedTrade[]; skipped: number } {
+export function parseMt5Html(html: string): {
+  trades: ParsedTrade[];
+  skipped: number;
+  truncated: boolean;
+} {
   const trades: ParsedTrade[] = [];
   let skipped = 0;
 
   const section = slicePositionsSection(html);
-  const rows = splitRows(section);
+  const { rows, truncated: rowsTruncated } = splitRows(section);
+  let truncated = rowsTruncated;
 
   for (const rowInner of rows) {
+    // Same ceiling as MT4 — see the note there.
+    if (trades.length >= MAX_TRADES_PER_FILE) {
+      truncated = true;
+      break;
+    }
+
     const cells = rowCells(rowInner);
     if (cells.length < 13) continue;
 
@@ -104,5 +116,5 @@ export function parseMt5Html(html: string): { trades: ParsedTrade[]; skipped: nu
     });
   }
 
-  return { trades, skipped };
+  return { trades, skipped, truncated };
 }

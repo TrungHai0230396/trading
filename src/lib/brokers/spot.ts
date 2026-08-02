@@ -17,6 +17,7 @@ import "server-only";
 
 import { loadCreds } from "@/lib/brokers/store";
 import { getServerPublicIp } from "@/lib/server-ip";
+import { BINANCE_WEIGHT, binanceJson } from "@/lib/net/binance-guard";
 import {
   getSpotAssets,
   getAccountBalance as getBitgetFuturesBalance,
@@ -123,17 +124,17 @@ async function cachedTickers(
 
 async function binanceTickerMap(): Promise<Map<string, number>> {
   return cachedTickers("binance", async () => {
-    const res = await fetch("https://api.binance.com/api/v3/ticker/price", {
-      signal: AbortSignal.timeout(10_000),
-      cache: "no-store",
+    // Through the shared guard, not a bare fetch: this runs on the portfolio
+    // path for every connected user, and an unguarded call keeps hitting
+    // Binance during a 429/418 window — which is what turns a short rate-limit
+    // into a long IP ban for the whole box.
+    const rows = await binanceJson<Array<{ symbol: string; price: string }>>({
+      path: "/api/v3/ticker/price",
+      ttlMs: 60_000,
+      weight: BINANCE_WEIGHT.ticker24hAll,
+      priority: "background",
+      timeoutMs: 10_000,
     });
-    if (!res.ok) {
-      throw new Error(`Không lấy được bảng giá Binance (HTTP ${res.status}).`);
-    }
-    const rows = (await res.json()) as Array<{
-      symbol: string;
-      price: string;
-    }>;
     const map = new Map<string, number>();
     for (const r of rows) {
       const p = Number(r.price);

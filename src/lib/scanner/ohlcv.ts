@@ -8,16 +8,22 @@
  *  - Splitting keeps the scanner hot path lean while making it possible
  *    for the analysis page to ask for the full bar shape.
  *
- * Cache policy: `no-store` — same reasoning as candles.ts. Stale candles
- * lead to stale trade plans which silently lie to the user.
+ * Cache policy: never Next's fetch cache — same reasoning as candles.ts.
+ * Stale candles lead to stale trade plans which silently lie to the user.
+ * The Binance side shares candles.ts's kline fetch, so it inherits the
+ * egress guard (short in-process TTL, coalescing, 429/418 breaker, pacing)
+ * and reuses the SAME cache entry the scanner already paid for.
  */
 
 import { findForexPair, tdSymbol } from "@/lib/calc/forex-pairs";
 import {
   CandleFetchError,
+  fetchBinanceKlines,
+  toCandleFetchError,
   type Market,
   type Timeframe,
 } from "./candles";
+import type { BinancePriority } from "@/lib/net/binance-guard";
 
 export type OHLCVBar = {
   /** Open time in ms since epoch. */
@@ -53,10 +59,12 @@ export async function getOHLCV(opts: {
   symbol: string;
   timeframe: Timeframe;
   limit?: number;
+  /** Lets background callers skip the interactive queue — see the guard. */
+  priority?: BinancePriority;
 }): Promise<OHLCVBar[]> {
   const limit = Math.max(50, Math.min(1000, opts.limit ?? 200));
   if (opts.market === "CRYPTO") {
-    return getBinanceOHLCV(opts.symbol, opts.timeframe, limit);
+    return getBinanceOHLCV(opts.symbol, opts.timeframe, limit, opts.priority);
   }
   return getTwelveDataOHLCV(opts.symbol, opts.timeframe, limit);
 }
@@ -65,29 +73,18 @@ async function getBinanceOHLCV(
   symbol: string,
   timeframe: Timeframe,
   limit: number,
+  priority?: BinancePriority,
 ): Promise<OHLCVBar[]> {
   const sym = symbol.toUpperCase().replace("/", "");
   const interval = BINANCE_INTERVAL[timeframe];
-  const url = new URL("https://api.binance.com/api/v3/klines");
-  url.searchParams.set("symbol", sym);
-  url.searchParams.set("interval", interval);
-  url.searchParams.set("limit", String(limit));
 
-  const res = await fetch(url, { cache: "no-store" });
-  if (!res.ok) {
-    if (res.status === 400) {
-      throw new CandleFetchError(
-        `Binance không nhận diện symbol "${sym}".`,
-        400,
-      );
-    }
-    throw new CandleFetchError(
-      `Binance lỗi HTTP ${res.status} khi tải ${sym} ${interval}.`,
-      res.status,
-    );
+  let raw: unknown;
+  try {
+    raw = await fetchBinanceKlines({ sym, interval, limit, priority });
+  } catch (e) {
+    throw toCandleFetchError(e, sym, interval);
   }
 
-  const raw = (await res.json()) as unknown[];
   if (!Array.isArray(raw)) {
     throw new CandleFetchError("Binance trả về dữ liệu không hợp lệ.");
   }

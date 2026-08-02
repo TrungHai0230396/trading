@@ -29,6 +29,30 @@ export async function POST(_req: Request, ctx: RouteCtx) {
     return NextResponse.json({ error: "Chưa đăng nhập" }, { status: 401 });
   }
 
+  // This endpoint also builds a snapshot (below), which fans out ~7 fresh
+  // Binance REST calls from the ONE shared server IP. Meter that fan-out with
+  // the SAME keys and ceilings the analysis page uses — see
+  // src/app/(app)/scanner/analysis/[market]/[symbol]/page.tsx — so alternating
+  // page loads and AI runs can't buy a user twice the Binance budget. Getting
+  // the server IP banned would break prices, portfolio and the shared
+  // consensus alerts for everyone, not just the abuser.
+  //
+  // Checked BEFORE the Gemini cap on purpose: a throttled user shouldn't also
+  // lose one of their 15 hourly AI slots for a request that never ran.
+  //
+  // NOTE: `rateLimit()` counts per-process — exact for this single-container
+  // deploy, but the effective ceiling multiplies by replica count if the app
+  // is ever scaled out.
+  if (
+    !rateLimit(`analysis-snap-m:${session.user.id}`, 30, 60_000) ||
+    !rateLimit(`analysis-snap-h:${session.user.id}`, 300, 60 * 60_000)
+  ) {
+    return NextResponse.json(
+      { error: "Bạn đang xem hơi nhanh. Nghỉ một lát rồi thử lại nhé." },
+      { status: 429 },
+    );
+  }
+
   // Each call spends Gemini quota on the shared GEMINI_API_KEY (the owner's
   // bill). Cap it so one user can't loop the button and drain quota/cost.
   if (!rateLimit(`ai-scan:${session.user.id}`, 15, 60 * 60_000)) {

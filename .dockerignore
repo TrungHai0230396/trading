@@ -19,6 +19,14 @@ src/generated
 .env.production
 *.log
 
+# Nightly MySQL dumps (docker-compose mounts ./backups into db-backup).
+# Dockerfile does `COPY . .`, so without this every dump — i.e. every user's
+# encrypted exchange API keys, emails and trades — gets baked into the app
+# image and ships anywhere the image goes. Keep dumps out of the build context.
+/backups/
+*.sql
+*.sql.gz
+
 coverage
 dist
 build

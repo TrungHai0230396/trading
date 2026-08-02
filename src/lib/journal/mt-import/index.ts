@@ -10,6 +10,7 @@ import { parseMt5Html } from "./mt5";
 import type { ParseResult } from "./types";
 
 export type { ParsedBroker, ParsedMarket, ParsedTrade, ParseResult } from "./types";
+export { MAX_ROWS_PER_FILE, MAX_TRADES_PER_FILE } from "./types";
 
 const MT5_HINTS = [
   /Trading\s+Account\s+Statement/i, // MT5 statement title
@@ -25,19 +26,22 @@ const MT4_HINTS = [
 ];
 
 function detectBroker(html: string): "MT4" | "MT5" {
+  // Decisive check first: the Positions caption is a strong MT5 signal even
+  // when MT4-style captions also appear in a hybrid export. Running it up
+  // front also spares the document the six extra full scans below, which
+  // matters on a multi-megabyte upload.
+  if (/>\s*Positions\s*</i.test(html) && /Symbol/i.test(html)) return "MT5";
+
   let mt5Score = 0;
   let mt4Score = 0;
   for (const re of MT5_HINTS) if (re.test(html)) mt5Score += 1;
   for (const re of MT4_HINTS) if (re.test(html)) mt4Score += 1;
-  // The Positions caption is a strong MT5 signal even when MT4-style
-  // captions also appear in a hybrid export.
-  if (/>\s*Positions\s*</i.test(html) && /Symbol/i.test(html)) return "MT5";
   return mt5Score > mt4Score ? "MT5" : "MT4";
 }
 
 export function parseMtHtml(html: string): ParseResult {
   const broker = detectBroker(html);
-  const { trades, skipped } =
+  const { trades, skipped, truncated } =
     broker === "MT5" ? parseMt5Html(html) : parseMt4Html(html);
-  return { broker, trades, skipped };
+  return { broker, trades, skipped, truncated };
 }

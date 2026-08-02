@@ -30,7 +30,37 @@ export type ParseResult = {
   broker: ParsedBroker;
   trades: ParsedTrade[];
   skipped: number;
+  // The file hit one of the work caps below, so the trade list is
+  // incomplete. Callers MUST surface this instead of importing a partial
+  // history — half a journal silently becomes wrong statistics.
+  truncated: boolean;
 };
+
+// ──────────────────────────────────────────────────────────────────────
+// Work caps
+//
+// The importer runs inside the same single Node process that serves every
+// other user, so one crafted upload must never be able to buy unbounded
+// CPU or memory. These ceilings sit far above any genuine MetaTrader
+// statement: a very active year is a few hundred closed trades, and the
+// caption slicing means only one report section is ever scanned.
+// ──────────────────────────────────────────────────────────────────────
+
+/** Max `<tr>` chunks scanned per report section. */
+export const MAX_ROWS_PER_FILE = 20_000;
+
+/** Max trades emitted from one file (also bounds the preview payload). */
+export const MAX_TRADES_PER_FILE = 2_000;
+
+/** MT tables top out around 14 columns; the rest is noise. */
+const MAX_CELLS_PER_ROW = 64;
+
+/**
+ * Longest raw cell we bother stripping. Real cells are a few dozen chars;
+ * without this a single crafted `<td>` could carry megabytes into the
+ * parsed symbol/comment and back out through the JSON preview response.
+ */
+const MAX_CELL_CHARS = 1_024;
 
 // ──────────────────────────────────────────────────────────────────────
 // Helpers shared by mt4 / mt5 parsers
@@ -102,18 +132,78 @@ export function classifyMarket(symbol: string): ParsedMarket {
   return "OTHER";
 }
 
+// ──────────────────────────────────────────────────────────────────────
+// Tag scanning
+//
+// These used to be regexes of the shape `/<tr\b[^>]*>([\s\S]*?)<\/tr>/gi`.
+// That is quadratic on hostile input: given a body like `"<tr>".repeat(1e6)`
+// with no closing tag, the engine restarts the lazy `[\s\S]*?` at every
+// `<tr` position and each attempt walks to the end of the document. A few
+// megabytes of that pegs the event loop — and because the whole app is one
+// Node process, a single POST would freeze the site for every user. The
+// scanners below only ever move an index forward, so they are linear.
+// ──────────────────────────────────────────────────────────────────────
+
+/** True when `ch` ends an HTML tag name (mirrors the old `\b` guard). */
+function isTagNameEnd(ch: string | undefined): boolean {
+  return (
+    ch === undefined ||
+    ch === ">" ||
+    ch === "/" ||
+    ch === " " ||
+    ch === "\t" ||
+    ch === "\n" ||
+    ch === "\r" ||
+    ch === "\f"
+  );
+}
+
+/** Index of the next `</td` / `</th` at or after `from`, or -1. */
+function findCellClose(lower: string, from: number): number {
+  let i = from;
+  while (i < lower.length) {
+    const lt = lower.indexOf("</t", i);
+    if (lt < 0) return -1;
+    const kind = lower[lt + 3];
+    if (kind === "d" || kind === "h") return lt;
+    i = lt + 3; // e.g. `</table>` — keep moving forward
+  }
+  return -1;
+}
+
 /**
  * Split an HTML blob into raw `<tr>...</tr>` chunks. Forgiving — the
- * MT terminals close all tags, but malformed exports do happen.
+ * MT terminals close all tags, but malformed exports do happen. Stops at
+ * `maxRows` and says so, rather than chewing through an arbitrary number
+ * of rows.
  */
-export function splitRows(html: string): string[] {
+export function splitRows(
+  html: string,
+  maxRows: number = MAX_ROWS_PER_FILE,
+): { rows: string[]; truncated: boolean } {
   const rows: string[] = [];
-  const re = /<tr\b[^>]*>([\s\S]*?)<\/tr>/gi;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(html)) !== null) {
-    rows.push(m[1] ?? "");
+  const lower = html.toLowerCase(); // one pass, so indexOf can stay case-blind
+  let i = 0;
+
+  while (i < lower.length) {
+    const open = lower.indexOf("<tr", i);
+    if (open < 0) break;
+    if (!isTagNameEnd(lower[open + 3])) {
+      i = open + 3; // `<track>`, `<trx…` — not a row
+      continue;
+    }
+    const gt = lower.indexOf(">", open + 3);
+    if (gt < 0) break; // unterminated tag: nothing parseable is left
+    const close = lower.indexOf("</tr", gt + 1);
+
+    if (rows.length >= maxRows) return { rows, truncated: true };
+    rows.push(html.slice(gt + 1, close < 0 ? html.length : close));
+
+    if (close < 0) break; // last row was never closed — take what we have
+    i = close + 4;
   }
-  return rows;
+
+  return { rows, truncated: false };
 }
 
 /**
@@ -122,10 +212,27 @@ export function splitRows(html: string): string[] {
  */
 export function rowCells(rowInner: string): string[] {
   const cells: string[] = [];
-  const re = /<t[dh]\b[^>]*>([\s\S]*?)<\/t[dh]>/gi;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(rowInner)) !== null) {
-    cells.push(stripCellHtml(m[1] ?? ""));
+  const lower = rowInner.toLowerCase();
+  let i = 0;
+
+  while (i < lower.length && cells.length < MAX_CELLS_PER_ROW) {
+    const lt = lower.indexOf("<t", i);
+    if (lt < 0) break;
+    const kind = lower[lt + 2];
+    if ((kind !== "d" && kind !== "h") || !isTagNameEnd(lower[lt + 3])) {
+      i = lt + 2; // `<table>`, `<title>` — not a cell
+      continue;
+    }
+    const gt = lower.indexOf(">", lt + 3);
+    if (gt < 0) break;
+    const close = findCellClose(lower, gt + 1);
+    const end = close < 0 ? rowInner.length : close;
+
+    cells.push(stripCellHtml(rowInner.slice(gt + 1, Math.min(end, gt + 1 + MAX_CELL_CHARS))));
+
+    if (close < 0) break;
+    i = end + 4;
   }
+
   return cells;
 }
