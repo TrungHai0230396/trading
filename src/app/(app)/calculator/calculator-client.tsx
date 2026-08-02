@@ -908,50 +908,68 @@ function CreateTradeButton({
   // Forex: làm tròn XUỐNG về bước lot 0.01 để size ghi vào nhật ký không vượt
   // quá risk đã tính (0.012 std lot → 0.01, không phải 0.012). Crypto để units
   // lẻ như cũ (không có bước 0.01).
-  const lotSize =
-    result.market === "FOREX"
-      ? Math.floor((result.positionSize.standardLots ?? 0) * 100) / 100
-      : result.positionSize.units;
+  const isForex = result.market === "FOREX";
+  const exactLots = result.positionSize.standardLots ?? 0;
+  const lotSize = isForex
+    ? Math.floor(exactLots * 100) / 100
+    : result.positionSize.units;
+
+  // Brokers trade forex in 0.01-lot steps, so flooring a size below 0.01 lands
+  // on 0.00 — not a position anyone can actually open. That is a real answer,
+  // not a bug: the risk is too small for this stop distance. Don't silently
+  // round up (that would quietly exceed the risk the user asked for); offer
+  // the minimum lot as an explicit, priced choice instead.
+  const belowMinLot = isForex && exactLots > 0 && lotSize <= 0;
+  const MIN_LOT = 0.01;
+  const riskPerLot =
+    result.stopLossPips != null && result.pipValuePerLotInAccount != null
+      ? result.stopLossPips * result.pipValuePerLotInAccount
+      : null;
+  const minLotRisk = riskPerLot != null ? MIN_LOT * riskPerLot : null;
 
   // Strip the "BASE / QUOTE" display name down to the broker symbol — for
   // crypto the API returns the raw symbol in meta.symbol; for forex it's
   // the 6-char pair like EURUSD.
   const symbolParam = (result.meta.symbol || state.symbol).toUpperCase();
 
-  const params = new URLSearchParams();
-  params.set("symbol", symbolParam);
-  params.set("market", result.market);
-  if (direction) params.set("direction", direction);
-  if (Number.isFinite(entry) && entry > 0)
-    params.set("entryPrice", String(entry));
-  if (Number.isFinite(stop) && stop > 0)
-    params.set("stopLoss", String(stop));
   const tp = num(state.tpPrice);
-  if (Number.isFinite(tp) && tp > 0) params.set("takeProfit", String(tp));
-  if (lotSize > 0) params.set("lotSize", String(lotSize));
-  if (result.riskAmount > 0)
-    params.set("riskAmount", String(result.riskAmount));
-  // Carry the suggested leverage for reference in the journal note
-  // instead of falling back to the hardcoded default. Use the "safe"
-  // (50% buffer) value rather than rounded — at `rounded` the liquidation
-  // price sits right behind SL, which a mark-price wick can reach first.
-  // Always FLOOR — never round up; less leverage = more margin = safer.
+
+  // Carry the suggested leverage for reference in the journal note instead of
+  // falling back to the hardcoded default. Use the "safe" (50% buffer) value
+  // rather than `rounded` — at `rounded` the liquidation price sits right
+  // behind SL, which a mark-price wick can reach first. Always FLOOR: less
+  // leverage = more margin = safer.
   const safeLev =
     result.leverage && result.market === "CRYPTO"
       ? Math.max(1, Math.floor(result.leverage.safe))
       : null;
-  if (safeLev != null) params.set("leverage", String(safeLev));
-  // Carry a Calculator summary into the journal setup note ONLY for crypto —
-  // it holds the suggested leverage, which has no dedicated field. For forex,
-  // risk + lots already fill their own fields and "leverage" is meaningless
-  // (set once at account level by the broker), so leave the setup note empty
-  // for the user to write their own.
-  if (result.market === "CRYPTO") {
-    params.set(
-      "setup",
-      `Tính từ Calculator: risk ${result.riskAmount}, ${lotSize} units${result.leverage && safeLev != null ? `, đòn bẩy ${safeLev}x (tối đa ${result.leverage.rounded}x)` : ""}`,
-    );
-  }
+
+  /**
+   * Build the journal deep link for a given size. Parameterised because the
+   * below-minimum case offers a second, explicitly-priced option (0.01 lot)
+   * alongside the computed one.
+   */
+  const hrefFor = (lot: number, riskOverride?: number): string => {
+    const params = new URLSearchParams();
+    params.set("symbol", symbolParam);
+    params.set("market", result.market);
+    if (direction) params.set("direction", direction);
+    if (Number.isFinite(entry) && entry > 0)
+      params.set("entryPrice", String(entry));
+    if (Number.isFinite(stop) && stop > 0) params.set("stopLoss", String(stop));
+    if (Number.isFinite(tp) && tp > 0) params.set("takeProfit", String(tp));
+    if (lot > 0) params.set("lotSize", String(lot));
+    const risk = riskOverride ?? result.riskAmount;
+    if (risk > 0) params.set("riskAmount", String(risk));
+    if (safeLev != null) params.set("leverage", String(safeLev));
+    if (result.market === "CRYPTO") {
+      params.set(
+        "setup",
+        `Tính từ Calculator: risk ${result.riskAmount}, ${lot} units${result.leverage && safeLev != null ? `, đòn bẩy ${safeLev}x (tối đa ${result.leverage.rounded}x)` : ""}`,
+      );
+    }
+    return `/journal/new?${params.toString()}`;
+  };
 
   const disabled = !hasPriceMode || lotSize <= 0;
 
@@ -960,20 +978,49 @@ function CreateTradeButton({
       <Button
         className="w-full"
         disabled={disabled}
-        render={
-          <Link
-            href={`/journal/new?${params.toString()}`}
-            aria-disabled={disabled}
-          />
-        }
+        render={<Link href={hrefFor(lotSize)} aria-disabled={disabled} />}
       >
         <NotebookPen className="size-4" />
         Tạo lệnh trong Nhật ký
       </Button>
-      {disabled ? (
+      {!hasPriceMode ? (
         <p className="text-[11px] text-muted-foreground">
           Cần điền giá vào + giá Stop loss để dùng nút này.
         </p>
+      ) : belowMinLot ? (
+        // The real reason, instead of the old catch-all "fill in entry + SL"
+        // message that fired here even when both were filled.
+        <div className="space-y-2 rounded-md border border-warning/40 bg-warning/5 p-2.5">
+          <p className="text-[11px] leading-relaxed text-muted-foreground">
+            Khối lượng đúng là{" "}
+            <strong className="num">{exactLots.toFixed(4)}</strong> lot — nhỏ
+            hơn mức tối thiểu <strong>0.01</strong> của sàn, làm tròn xuống
+            thành 0.00 nên không vào lệnh được. Hãy{" "}
+            <strong>tăng số tiền risk</strong> hoặc <strong>thu hẹp Stop
+            loss</strong>.
+          </p>
+          {minLotRisk != null ? (
+            <>
+              <Button
+                variant="outline"
+                size="sm"
+                className="w-full"
+                render={<Link href={hrefFor(MIN_LOT, minLotRisk)} />}
+              >
+                <NotebookPen className="size-4" />
+                Vẫn tạo với 0.01 lot
+              </Button>
+              <p className="text-[11px] text-muted-foreground">
+                Lưu ý: 0.01 lot risk{" "}
+                <strong className="num">
+                  {state.accountCurrency} {minLotRisk.toFixed(2)}
+                </strong>
+                , cao hơn mức {state.accountCurrency}{" "}
+                {result.riskAmount.toFixed(2)} bạn đặt.
+              </p>
+            </>
+          ) : null}
+        </div>
       ) : (
         <p className="text-[11px] leading-relaxed text-muted-foreground">
           Mở form Nhật ký với các trường đã điền sẵn ({symbolParam}, {direction},
