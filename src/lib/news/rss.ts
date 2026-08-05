@@ -9,6 +9,8 @@
  * publicly with no auth, and produce stable, well-formed XML.
  */
 
+import { createHash } from "node:crypto";
+
 const FEEDS: { source: string; url: string }[] = [
   // Nguồn tiếng Việt — ưu tiên hiển thị (dẫn nguồn báo VN).
   { source: "Blog Tiền Ảo", url: "https://blogtienao.com/feed" },
@@ -24,7 +26,8 @@ const FEEDS: { source: string; url: string }[] = [
 ];
 
 export type RssArticle = {
-  externalId: string; // namespaced: "rss:<source-slug>:<guid>"
+  /** "rss:<source-slug>:<sha256(guid) truncated>" — see makeExternalId. */
+  externalId: string;
   title: string;
   url: string;
   source: string;
@@ -61,6 +64,26 @@ function slugify(s: string): string {
     .replace(/^-+|-+$/g, "");
 }
 
+/**
+ * Build the dedup key for an article.
+ *
+ * The guid is HASHED rather than embedded raw: NewsArticle.externalId is a
+ * plain `String @unique`, which Prisma maps to VARCHAR(191) on MySQL, and
+ * Google News guids run well past that. Every insert from that feed was
+ * failing with "value too long for column externalId" — the news section had
+ * silently stopped taking new articles entirely (fetched 50, inserted 0, every
+ * hour, for every user).
+ *
+ * Hashing rather than truncating: Google News guids share a long common
+ * prefix, so a 191-char cut would collide two different articles into one and
+ * silently drop the second. The source slug stays in the clear so a row is
+ * still recognisable when reading the table by hand.
+ */
+function makeExternalId(source: string, guid: string): string {
+  const digest = createHash("sha256").update(guid).digest("hex").slice(0, 32);
+  return `rss:${slugify(source)}:${digest}`;
+}
+
 function parseItem(itemXml: string, source: string): RssArticle | null {
   const titleRaw = pickTag(itemXml, "title");
   const linkRaw = pickTag(itemXml, "link");
@@ -79,7 +102,7 @@ function parseItem(itemXml: string, source: string): RssArticle | null {
   if (Number.isNaN(publishedAt.getTime()) || !title || !url) return null;
 
   return {
-    externalId: `rss:${slugify(source)}:${guid}`,
+    externalId: makeExternalId(source, guid),
     title: title.slice(0, 512),
     url,
     source,

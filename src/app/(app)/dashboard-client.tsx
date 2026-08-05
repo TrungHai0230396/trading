@@ -59,6 +59,8 @@ type DashboardData = {
     todayPnl: number;
     openCount: number;
     closed30: number;
+    /** Closed trades in the window that carry a real P&L — the win-rate denominator. */
+    scored30: number;
     winRate30: number | null;
     avgR30: number | null;
   };
@@ -133,7 +135,7 @@ const fmt = (n: number | null | undefined, dp = 2): string =>
     : "—";
 
 // Performance stats from a handful of trades scream (a lone red -1.06R was
-// the loudest number on the page). Below this many closed trades we show
+// the loudest number on the page). Below this many SCORED trades we show
 // "—" instead of pretending the sample means something.
 const MIN_SAMPLE = 5;
 
@@ -208,7 +210,43 @@ export function DashboardClient() {
   const openDisplay =
     s !== undefined ? Math.max(s.openCount, positions.length) : null;
 
-  const enoughSample = (s?.closed30 ?? 0) >= MIN_SAMPLE;
+  // The sample gate counts SCORED trades — closed ones carrying a real P&L.
+  // Auto-close creates CLOSED rows with pnl = null in bulk (the exchange
+  // can't tell us the exit figure), and those are unknown outcomes, not
+  // losses: they must stay out of both the numerator and the denominator.
+  // With nothing scored the cell shows "—" rather than a "WR 0%" that reads
+  // as "you lose every trade".
+  const scored30 = s?.scored30 ?? 0;
+  const enoughSample = scored30 >= MIN_SAMPLE;
+  const perf: { value: string | null; hint: string; tone: number } =
+    s === undefined
+      ? { value: null, hint: "", tone: 0 }
+      : !enoughSample || s.winRate30 === null
+        ? {
+            value: "—",
+            hint:
+              s.closed30 === 0
+                ? "Chưa có lệnh đóng nào trong 30 ngày"
+                : scored30 === 0
+                  ? `${s.closed30} lệnh đóng, chưa lệnh nào có P/L`
+                  : `Chưa đủ dữ liệu (${scored30}/${s.closed30} lệnh đóng có P/L)`,
+            tone: 0,
+          }
+        : {
+            // Never `?? 0` a null stat here — that prints a number the app
+            // does not know as if it were the user's real result.
+            value: `WR ${(s.winRate30 * 100).toFixed(0)}% · ${
+              s.avgR30 === null
+                ? "—R"
+                : `${s.avgR30 > 0 ? "+" : ""}${s.avgR30.toFixed(2)}R`
+            }`,
+            hint:
+              scored30 === s.closed30
+                ? `${scored30} lệnh đóng trong 30 ngày`
+                : `Tính trên ${scored30}/${s.closed30} lệnh đóng đã có P/L`,
+            tone: s.avgR30 === null ? 0 : Math.sign(s.avgR30),
+          };
+
   const statCells = [
     {
       label: "P/L hôm nay",
@@ -230,20 +268,9 @@ export function DashboardClient() {
     },
     {
       label: "Hiệu suất 30 ngày",
-      value:
-        s === undefined
-          ? null
-          : !enoughSample
-            ? "—"
-            : `WR ${((s.winRate30 ?? 0) * 100).toFixed(0)}% · ${
-                (s.avgR30 ?? 0) > 0 ? "+" : ""
-              }${(s.avgR30 ?? 0).toFixed(2)}R`,
-      hint: !s
-        ? ""
-        : enoughSample
-          ? `${s.closed30} lệnh đóng trong 30 ngày`
-          : `Chưa đủ dữ liệu (${s.closed30} lệnh đóng)`,
-      tone: s === undefined || !enoughSample ? 0 : Math.sign(s.avgR30 ?? 0),
+      value: perf.value,
+      hint: perf.hint,
+      tone: perf.tone,
     },
   ];
 

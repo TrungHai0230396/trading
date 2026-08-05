@@ -73,6 +73,10 @@ function summarize(
   rows: Row[],
 ): SystemStat {
   const closedRows = rows.filter((r) => r.status === "CLOSED");
+  // Only trades with a KNOWN P&L belong in a win-rate. A closed trade with no
+  // number yet is unknown, not a loss — auto-close creates those whenever the
+  // exchange can't tell us the exit figure.
+  const scoredRows = closedRows.filter((r) => r.pnl !== null);
   let wins = 0;
   let totalPnl = 0;
   let rSum = 0;
@@ -98,20 +102,35 @@ function summarize(
     }
   }
 
-  // Checklist adherence over closed trades that carry a snapshot.
+  // Two different questions, so two different denominators.
+  //
+  // ADHERENCE — "how often did you follow your own checklist?" — has nothing to
+  // do with money, so it counts every closed trade carrying a snapshot. Scoping
+  // it to trades with a P&L would report 1/3 where the truth is 9/12, and hide
+  // the block entirely for a user who ticks diligently but hasn't entered
+  // results yet.
   const withChecks = closedRows.filter((r) => r.checks.length > 0);
   let followed = 0;
-  let followedWins = 0;
   let notFollowed = 0;
-  let notFollowedWins = 0;
   for (const r of withChecks) {
-    const ok = followedChecklist(r.checks);
+    if (followedChecklist(r.checks)) followed += 1;
+    else notFollowed += 1;
+  }
+
+  // WIN-RATE followed vs not — this one IS about money, so a trade with no P&L
+  // entered yet must not land on the "not a win" side of either bucket.
+  const scoredWithChecks = withChecks.filter((r) => r.pnl !== null);
+  let followedScored = 0;
+  let followedWins = 0;
+  let notFollowedScored = 0;
+  let notFollowedWins = 0;
+  for (const r of scoredWithChecks) {
     const win = (r.pnl ?? 0) > 0;
-    if (ok) {
-      followed += 1;
+    if (followedChecklist(r.checks)) {
+      followedScored += 1;
       if (win) followedWins += 1;
     } else {
-      notFollowed += 1;
+      notFollowedScored += 1;
       if (win) notFollowedWins += 1;
     }
   }
@@ -124,7 +143,7 @@ function summarize(
     closed: closedRows.length,
     open: rows.filter((r) => r.status === "OPEN").length,
     pending: rows.filter((r) => r.status === "PENDING").length,
-    winRate: closedRows.length > 0 ? wins / closedRows.length : 0,
+    winRate: scoredRows.length > 0 ? wins / scoredRows.length : 0,
     totalPnl,
     avgR: rCount > 0 ? rSum / rCount : 0,
     profitFactor: lossSum > 0 ? winSum / lossSum : winSum > 0 ? null : 0,
@@ -133,8 +152,10 @@ function summarize(
     checkedTrades: withChecks.length,
     followed,
     adherenceRate: withChecks.length > 0 ? followed / withChecks.length : 0,
-    winRateFollowed: followed > 0 ? followedWins / followed : null,
-    winRateNotFollowed: notFollowed > 0 ? notFollowedWins / notFollowed : null,
+    winRateFollowed:
+      followedScored > 0 ? followedWins / followedScored : null,
+    winRateNotFollowed:
+      notFollowedScored > 0 ? notFollowedWins / notFollowedScored : null,
   };
 }
 

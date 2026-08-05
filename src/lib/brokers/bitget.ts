@@ -324,6 +324,14 @@ export type BitgetClosedPosition = {
   openedAt: Date;
 };
 
+/**
+ * Bitget keeps 3 months of position history and rejects a wider range. A
+ * caller reconciling a position it first saw months ago would otherwise get
+ * an API error instead of "nothing found" — clamp rather than fail, and let
+ * the caller treat an empty result as "the exchange can't tell us".
+ */
+const HISTORY_WINDOW_MS = 90 * 24 * 60 * 60_000;
+
 export async function getPositionHistory(
   creds: BitgetCreds,
   args: {
@@ -339,7 +347,11 @@ export async function getPositionHistory(
     productType: "USDT-FUTURES",
   };
   if (args.symbol) query.symbol = args.symbol;
-  if (args.startTime) query.startTime = String(args.startTime.getTime());
+  if (args.startTime) {
+    query.startTime = String(
+      Math.max(args.startTime.getTime(), Date.now() - HISTORY_WINDOW_MS),
+    );
+  }
   if (args.endTime) query.endTime = String(args.endTime.getTime());
   query.limit = String(args.limit ?? 20);
 

@@ -94,6 +94,13 @@ function fmtMoney(n: number, ccy: string): string {
   return `${sign}${ccy} ${fmtNum(n)}`;
 }
 
+/**
+ * What /api/journal/stats actually returns. `scoredTrades` — closed trades
+ * carrying a real P&L, i.e. the set `winRate` is computed over — is not in the
+ * shared JournalStats type yet, so it is declared here.
+ */
+type JournalStatsResponse = JournalStats & { scoredTrades: number };
+
 type LiveQuote = {
   tradeId: string;
   symbol: string;
@@ -152,7 +159,7 @@ export function JournalClient() {
     placeholderData: keepPreviousData,
   });
 
-  const stats = useQuery<JournalStats>({
+  const stats = useQuery<JournalStatsResponse>({
     queryKey: ["journal", "stats"],
     queryFn: async ({ signal }) => {
       const res = await fetch("/api/journal/stats", { signal });
@@ -162,7 +169,7 @@ export function JournalClient() {
           | null;
         throw new Error(j?.error ?? "Không tải được thống kê");
       }
-      return (await res.json()) as JournalStats;
+      return (await res.json()) as JournalStatsResponse;
     },
   });
 
@@ -441,25 +448,44 @@ export function JournalClient() {
 // ──────────────────────────────────────────────────────────────────────
 // Stats bar
 // ──────────────────────────────────────────────────────────────────────
+/**
+ * Caption for the win-rate card. It must name the SAME set the percentage was
+ * computed over: closed trades carrying a real P&L. Captioning "60%" with
+ * "20 lệnh đã đóng" while the 60% came from 10 of them let a reader
+ * back-compute 12 winners when the truth was 6.
+ */
+function winRateSub(data: JournalStatsResponse): string {
+  if (data.closedTrades === 0) return "0 lệnh đã đóng";
+  if (data.scoredTrades === 0) {
+    return `${data.closedTrades} lệnh đã đóng, chưa lệnh nào có P/L`;
+  }
+  if (data.scoredTrades === data.closedTrades) {
+    return `${data.closedTrades} lệnh đã đóng`;
+  }
+  return `Tính trên ${data.scoredTrades}/${data.closedTrades} lệnh đã đóng có P/L`;
+}
+
 function StatsBar({
   data,
   loading,
 }: {
-  data: JournalStats | undefined;
+  data: JournalStatsResponse | undefined;
   loading: boolean;
 }) {
   return (
     <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
       <StatCard
         label="Win rate"
-        value={loading ? null : data ? fmtPct(data.winRate) : "—"}
-        sub={
+        // No trade scored yet → "—". A flat 0% reads as "you lose every
+        // trade" rather than "no result entered".
+        value={
           loading
             ? null
-            : data
-              ? `${data.closedTrades} lệnh đã đóng`
-              : null
+            : data && data.scoredTrades > 0
+              ? fmtPct(data.winRate)
+              : "—"
         }
+        sub={loading ? null : data ? winRateSub(data) : null}
       />
       <StatCard
         label="R-multiple TB"

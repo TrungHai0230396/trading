@@ -274,45 +274,90 @@ export async function getOrderDetail(
 // ──────────────────────────────────────────────────────────────────────
 
 /**
+ * userTrades/income reject a window wider than 7 days (-1127), and Binance
+ * keeps nothing older anyway on this path. Clamping here turns "position
+ * first seen three weeks ago" from a hard API error into a partial answer —
+ * which the caller can detect via `closedQty` instead of trusting a sum that
+ * silently misses fills.
+ */
+export const CLOSE_HISTORY_WINDOW_MS = 7 * 24 * 60 * 60_000;
+
+/**
  * Closing fills + income for a symbol since a timestamp. Used by sync to
  * stamp exitPrice/pnl/fees on the journal once the position is flat.
  *
  * netProfit = Σ realizedPnl + Σ funding − Σ commission (matches Bitget's
  * fee-inclusive netProfit).
+ *
+ * `side` is for hedge-mode accounts, where the same symbol can hold a long
+ * and a short at once and only one of them closed: pass it and fills booked
+ * to the other side are dropped. One-way accounts report positionSide="BOTH"
+ * and are unaffected.
+ *
+ * CAUTION — these are WINDOW totals, not one trade's result. fapi has no
+ * closed-position record, so everything here is summed over whatever fills the
+ * window contains. If the user closed, re-entered and closed again between two
+ * syncs, the window holds TWO round-trips and `netProfit` is their sum (+40 and
+ * −70 → −30), a figure belonging to neither, with a qty-weighted `exitPrice`
+ * that was never traded. Nothing in the requested `userTrades` shape can split
+ * them: there is no side/buyer field to sign the quantities, and the window
+ * opens while the position is already open, so there is no flat anchor to cut
+ * on. The caller MUST therefore check `closedQty` against the size it last saw
+ * open — in BOTH directions — and treat a mismatch as "no answer" rather than
+ * stamping a money figure the exchange never reported.
  */
 export async function getCloseSummary(
   creds: BinanceCreds,
   symbol: string,
   since: Date,
+  side?: "long" | "short",
 ): Promise<{
   exitPrice: number | null;
   netProfit: number;
   totalFee: number;
   totalFunding: number;
   lastFillAt: Date | null;
+  /** Base-coin volume of the fills that actually realized PnL, i.e. how much
+   *  of the position we can see being closed inside the window. Compare it to
+   *  the size last seen open: SHORT of it means fills are missing, OVER it
+   *  means the window covers more than one round-trip — either way the figures
+   *  above describe no single trade. */
+  closedQty: number;
 } | null> {
-  const [trades, income] = await Promise.all([
+  const startTime = Math.max(
+    since.getTime(),
+    Date.now() - CLOSE_HISTORY_WINDOW_MS,
+  );
+  const [rawTrades, income] = await Promise.all([
     signedRequest<
       Array<{
         price: string;
         qty: string;
         realizedPnl: string;
         commission: string;
+        positionSide?: string; // LONG | SHORT | BOTH
         time: number;
       }>
     >(creds, "GET", "/fapi/v1/userTrades", {
       symbol,
-      startTime: since.getTime(),
+      startTime,
       limit: 200,
     }),
     signedRequest<
       Array<{ incomeType: string; income: string; time: number }>
     >(creds, "GET", "/fapi/v1/income", {
       symbol,
-      startTime: since.getTime(),
+      startTime,
       limit: 200,
     }),
   ]);
+
+  // Drop a fill only when it explicitly belongs to the OTHER side — an
+  // absent or "BOTH" positionSide means one-way mode, where every fill counts.
+  const other = side === "long" ? "SHORT" : side === "short" ? "LONG" : null;
+  const trades = other
+    ? rawTrades.filter((t) => t.positionSide !== other)
+    : rawTrades;
 
   const closing = trades.filter((t) => Number(t.realizedPnl) !== 0);
   if (closing.length === 0) return null;
@@ -321,9 +366,11 @@ export async function getCloseSummary(
   let notionalSum = 0;
   let lastFill = 0;
   for (const t of closing) {
-    const q = Number(t.qty);
+    // A single unparseable field would otherwise make qtySum NaN, and NaN
+    // reaches the caller as a "price" it will happily write to the journal.
+    const q = Number(t.qty) || 0;
     qtySum += q;
-    notionalSum += q * Number(t.price);
+    notionalSum += q * (Number(t.price) || 0);
     if (t.time > lastFill) lastFill = t.time;
   }
   let realized = 0;
@@ -343,6 +390,7 @@ export async function getCloseSummary(
     totalFee: commission,
     totalFunding: funding,
     lastFillAt: lastFill > 0 ? new Date(lastFill) : null,
+    closedQty: qtySum,
   };
 }
 

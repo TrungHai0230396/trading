@@ -4,7 +4,7 @@ import * as React from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
   AlertTriangle,
@@ -49,7 +49,11 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
+import { derivePnl } from "@/lib/journal/derive";
 import type { TradeDetail } from "@/lib/journal/types";
+// Type-only: symbol-history.ts is server-only, and `import type` is erased
+// before bundling, so nothing server-side follows this into the client.
+import type { SymbolHistory } from "@/lib/journal/symbol-history";
 import {
   TradingSystemCard,
   countUnmetRequired,
@@ -173,6 +177,48 @@ function localToIso(local: string): string | undefined {
   return d.toISOString();
 }
 
+/**
+ * What a stop-out on this trade would cost, in USD — the risk the user would
+ * otherwise have to work out by hand.
+ *
+ * Runs through derivePnl (the stop IS an exit price) so the per-instrument
+ * contract maths lives in exactly one place: forex resolves units-per-lot via
+ * findForexPair, and returns null for unknown or non-USD-quoted pairs because
+ * that result cannot be stated in USD. null here means "cannot know" and the
+ * caller must show nothing — a wrong risk would poison every R that follows.
+ */
+function impliedRisk(state: FormState): number | null {
+  if (
+    empty(state.symbol) ||
+    empty(state.entryPrice) ||
+    empty(state.stopLoss) ||
+    empty(state.lotSize)
+  ) {
+    return null;
+  }
+  const entryPrice = num(state.entryPrice);
+  const stopLoss = num(state.stopLoss);
+  const lotSize = num(state.lotSize);
+  if (!(entryPrice > 0) || !(stopLoss > 0) || !(lotSize > 0)) return null;
+
+  const atStop = derivePnl({
+    market: state.market,
+    symbol: state.symbol.trim(),
+    direction: state.direction,
+    entryPrice,
+    exitPrice: stopLoss,
+    lotSize,
+  });
+  // A stop on the profitable side of entry is not a stop — whatever that
+  // number is, it is not this trade's risk.
+  if (atStop === null || atStop >= 0) return null;
+
+  // Risk is money, so 2 decimals. Anything rounding to zero is not a figure
+  // the R column could use either.
+  const rounded = Math.round(-atStop * 100) / 100;
+  return rounded > 0 ? rounded : null;
+}
+
 const INITIAL: FormState = {
   symbol: "",
   market: "FOREX",
@@ -184,7 +230,10 @@ const INITIAL: FormState = {
   stopLoss: "",
   takeProfit: "",
   lotSize: "",
-  riskAmount: "0",
+  // Empty, not "0": a pre-filled 0 looked like an answer, and deriveRMultiple
+  // reads 0 as "unknown" — so every trade the user didn't hand-edit was saved
+  // with no R at all, quietly emptying the R column and "R trung bình".
+  riskAmount: "",
   pnl: "",
   feesAmount: "",
   openedAt: nowLocalIso(),
@@ -208,7 +257,10 @@ function fromTrade(t: TradeDetail): FormState {
     stopLoss: t.stopLoss !== null ? String(t.stopLoss) : "",
     takeProfit: t.takeProfit !== null ? String(t.takeProfit) : "",
     lotSize: t.lotSize !== null ? String(t.lotSize) : "",
-    riskAmount: t.riskAmount !== null ? String(t.riskAmount) : "0",
+    // 0 is how "unknown" was stored before (and how MT imports still read on
+    // old rows) — show it as empty so the field never claims a risk of zero.
+    riskAmount:
+      t.riskAmount !== null && t.riskAmount !== 0 ? String(t.riskAmount) : "",
     pnl: t.pnl !== null ? String(t.pnl) : "",
     feesAmount: t.feesAmount !== null ? String(t.feesAmount) : "",
     openedAt: isoToLocal(t.openedAt),
@@ -367,6 +419,9 @@ export function TradeFormClient({
         timeframe: empty(state.timeframe) ? undefined : state.timeframe.trim(),
         entryPrice: num(state.entryPrice),
         lotSize: num(state.lotSize),
+        // Empty = the user does not know their risk. 0 is how the schema
+        // spells that (deriveRMultiple treats <= 0 as unknown and leaves R
+        // null); we never invent a number to fill the gap.
         riskAmount: empty(state.riskAmount) ? 0 : num(state.riskAmount),
         openedAt: localToIso(state.openedAt),
         ...(empty(state.exitPrice)
@@ -746,6 +801,13 @@ export function TradeFormClient({
               </Field>
             </div>
 
+            {/* Only while creating: in edit mode the trade being edited is
+                itself part of the history, so the strip would be reporting
+                the row back at itself. */}
+            {mode === "new" ? (
+              <SymbolHistoryStrip symbol={state.symbol} />
+            ) : null}
+
             <div className="grid grid-cols-2 gap-3">
               <Field label="Hướng">
                 <Select
@@ -848,14 +910,22 @@ export function TradeFormClient({
             <Separator />
 
             <div className="grid grid-cols-2 gap-3">
-              <Field label="Số tiền risk">
-                <Input
-                  inputMode="decimal"
-                  className="num"
-                  value={state.riskAmount}
-                  onChange={(e) => update("riskAmount", e.target.value)}
-                  placeholder="50"
-                />
+              <Field label="Số tiền risk" htmlFor="risk-amount">
+                <div className="space-y-1.5">
+                  <Input
+                    id="risk-amount"
+                    inputMode="decimal"
+                    className="num"
+                    value={state.riskAmount}
+                    onChange={(e) => update("riskAmount", e.target.value)}
+                    placeholder="—"
+                  />
+                  <RiskHint
+                    suggestion={impliedRisk(state)}
+                    value={state.riskAmount}
+                    onAccept={(v) => update("riskAmount", v)}
+                  />
+                </div>
               </Field>
               <Field label="Phí (fees)">
                 <Input
@@ -1427,6 +1497,160 @@ export function TradeFormClient({
         </DialogContent>
       </Dialog>
 
+    </div>
+  );
+}
+
+/**
+ * The line under "Số tiền risk". Two jobs, both about the R column:
+ * the field is empty by default now, so it says what leaving it empty costs;
+ * and when SL + lot make the number knowable it offers that number to accept.
+ * Never silently fills the field — the user may have risked something else.
+ */
+function RiskHint({
+  suggestion,
+  value,
+  onAccept,
+}: {
+  suggestion: number | null;
+  value: string;
+  onAccept: (v: string) => void;
+}) {
+  const isEmpty = empty(value);
+  const text = suggestion !== null ? suggestion.toFixed(2) : null;
+  // The field already carries the number we would suggest, in whatever
+  // spelling ("51.2" and "51.20" are the same figure) — nothing left to offer.
+  if (suggestion !== null && !isEmpty && Math.abs(num(value) - suggestion) < 0.005)
+    return null;
+  if (text === null && !isEmpty) return null;
+
+  return (
+    <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+      {text !== null ? (
+        <>
+          <span>
+            Suy từ SL + khối lượng:{" "}
+            <span className="num text-foreground">{text} USD</span>
+          </span>
+          <Button
+            type="button"
+            size="xs"
+            variant="outline"
+            onClick={() => onAccept(text)}
+          >
+            Dùng số này
+          </Button>
+        </>
+      ) : null}
+      {isEmpty ? <span>Để trống thì lệnh này không có R.</span> : null}
+    </div>
+  );
+}
+
+const fmtAmount = (n: number, dp = 2) =>
+  new Intl.NumberFormat("en-US", {
+    minimumFractionDigits: dp,
+    maximumFractionDigits: dp,
+  }).format(n);
+
+/** Signed on purpose: "+120.00" vs "-120.00" reads faster than colour alone. */
+const fmtSigned = (n: number, dp = 2) =>
+  `${n > 0 ? "+" : ""}${fmtAmount(n, dp)}`;
+
+const fmtDayMonth = (iso: string) => {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleDateString("vi-VN", { day: "2-digit", month: "2-digit" });
+};
+
+/**
+ * The user's own record on this symbol, at the moment they are writing the
+ * next trade on it. Facts only — counts, averages and the last few results.
+ * It draws no conclusion and suggests no action.
+ *
+ * Renders nothing when there is no history (an empty widget is clutter) and
+ * stays silent while loading or on error — this is a bonus, never something
+ * the form should apologise for.
+ */
+function SymbolHistoryStrip({ symbol }: { symbol: string }) {
+  // The symbol can be free-typed (market "Khác"), so debounce before asking.
+  const [query, setQuery] = React.useState(() => symbol.trim().toUpperCase());
+  React.useEffect(() => {
+    const t = setTimeout(() => setQuery(symbol.trim().toUpperCase()), 300);
+    return () => clearTimeout(t);
+  }, [symbol]);
+
+  const history = useQuery<SymbolHistory>({
+    // Under the "journal" key so saving a trade refreshes it with everything
+    // else the journal invalidates.
+    queryKey: ["journal", "symbol-history", query],
+    enabled: query.length > 0,
+    staleTime: 60_000,
+    queryFn: async ({ signal }) => {
+      const url = new URL(
+        "/api/journal/symbol-history",
+        window.location.origin,
+      );
+      url.searchParams.set("symbol", query);
+      const res = await fetch(url, { signal });
+      if (!res.ok) {
+        const j = (await res.json().catch(() => null)) as
+          | { error?: string }
+          | null;
+        throw new Error(j?.error ?? "Không tải được lịch sử symbol");
+      }
+      return (await res.json()) as SymbolHistory;
+    },
+  });
+
+  const data = history.data;
+  if (!data || (data.closedTrades === 0 && data.openTrades === 0)) return null;
+
+  return (
+    <div className="space-y-1 rounded-md border border-border/60 bg-muted/30 p-2.5 text-xs text-muted-foreground">
+      <p>
+        <span className="num font-medium text-foreground">{data.symbol}</span>
+        {data.closedTrades > 0
+          ? ` — bạn đã đóng ${data.closedTrades} lệnh: ${data.wins} thắng / ${data.losses} thua`
+          : " — chưa có lệnh nào đã đóng"}
+        {data.breakEven > 0 ? ` / ${data.breakEven} hoà` : ""}
+        {data.withPnl < data.closedTrades
+          ? ` (${data.closedTrades - data.withPnl} lệnh chưa có P/L)`
+          : ""}
+        {data.openTrades > 0 ? ` · đang mở ${data.openTrades}` : ""}
+      </p>
+      {data.closedTrades > 0 ? (
+        <p>
+          R trung bình{" "}
+          <span className="num text-foreground">
+            {data.avgR === null ? "—" : `${fmtSigned(data.avgR)}R`}
+          </span>
+          {/* Say what the average is built on whenever it isn't every trade —
+              "0/14 lệnh có R" is the honest reason the value reads "—". */}
+          {data.withR < data.closedTrades
+            ? ` (${data.withR}/${data.closedTrades} lệnh có R)`
+            : ""}
+          {" · tổng P/L "}
+          <span className="num text-foreground">
+            {data.totalPnl === null
+              ? "—"
+              : `${data.currency} ${fmtSigned(data.totalPnl)}`}
+          </span>
+        </p>
+      ) : null}
+      {data.recent.length > 0 ? (
+        <p className="num">
+          Gần nhất:{" "}
+          {data.recent
+            .map(
+              (t) =>
+                `${t.direction} ${fmtDayMonth(t.closedAt ?? t.openedAt)} ${
+                  t.pnl === null ? "—" : fmtSigned(t.pnl)
+                }`,
+            )
+            .join(" · ")}
+        </p>
+      ) : null}
     </div>
   );
 }

@@ -175,9 +175,12 @@ export async function POST(req: Request) {
           stopLoss: t.stopLoss ?? null,
           takeProfit: t.takeProfit ?? null,
           lotSize: t.lotSize,
-          riskAmount: 0,
+          // An MT statement never says what the trader was risking, and a
+          // stop loss alone doesn't say it either (it may have been moved).
+          // null is that fact; 0 would read as "risked nothing".
+          riskAmount: null,
           pnl: t.pnl,
-          rMultiple: null, // riskAmount unknown for imports
+          rMultiple: null, // no riskAmount → no honest R for these rows
           feesAmount: fees,
           openedAt,
           closedAt,

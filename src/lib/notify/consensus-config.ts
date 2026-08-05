@@ -1,8 +1,12 @@
 /**
- * Per-user configuration for the consensus Telegram alert.
+ * Per-user configuration for the Telegram alerts.
  *
- * The cron scan reads this to decide WHICH timeframes must agree and
- * WHICH direction(s) to notify. Stored in AppSetting under
+ * Two independent groups live here:
+ *   - the consensus alert (about COINS — timeframes, direction, on/off),
+ *   - the personal DM prefs at the bottom (about the user's OWN journal).
+ *
+ * The cron scan reads the consensus half to decide WHICH timeframes must
+ * agree and WHICH direction(s) to notify. Stored in AppSetting under
  * `alert:consensus-config`; absent row = defaults (the original ask:
  * all of 1h/4h/1d/1w bullish).
  */
@@ -119,5 +123,70 @@ export async function setTfOverride(
     where: { userId_key: { userId, key: OVERRIDE_KEY } },
     create: { userId, key: OVERRIDE_KEY, value: current },
     update: { value: current },
+  });
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// Personal DM prefs — messages about the user's OWN journal
+// ──────────────────────────────────────────────────────────────────────
+//
+// Everything above notifies about coins. These two notify about the user's
+// own recorded trades, so both default OFF and must be switched on in
+// Settings: the only unsubscribe a user has is blocking the shared bot,
+// which would also kill their scanner alerts. An unwanted DM therefore
+// costs them a working feature, not just a tap.
+
+const PERSONAL_KEY = "alert:personal-dm";
+
+export type PersonalDmPrefs = {
+  /** Weekly recap of the user's own closed trades (Monday morning, VN). */
+  weeklyDigest: boolean;
+  /** DM when live price reaches an SL/TP the user recorded on an OPEN trade. */
+  levelWatch: boolean;
+};
+
+/** Opt-IN: an absent row, and anything short of an explicit `true`, is OFF. */
+function parsePersonalDmPrefs(value: unknown): PersonalDmPrefs {
+  const v = (value ?? {}) as Partial<PersonalDmPrefs>;
+  return {
+    weeklyDigest: v.weeklyDigest === true,
+    levelWatch: v.levelWatch === true,
+  };
+}
+
+export async function getPersonalDmPrefs(
+  userId: string,
+): Promise<PersonalDmPrefs> {
+  const row = await db.appSetting.findUnique({
+    where: { userId_key: { userId, key: PERSONAL_KEY } },
+  });
+  return parsePersonalDmPrefs(row?.value);
+}
+
+/**
+ * Batch variant for the crons: one query for the whole tick instead of one
+ * per user. Users with no row are simply absent from the map (= defaults).
+ */
+export async function getPersonalDmPrefsMap(
+  userIds: string[],
+): Promise<Map<string, PersonalDmPrefs>> {
+  const out = new Map<string, PersonalDmPrefs>();
+  if (userIds.length === 0) return out;
+  const rows = await db.appSetting.findMany({
+    where: { key: PERSONAL_KEY, userId: { in: userIds } },
+    select: { userId: true, value: true },
+  });
+  for (const r of rows) out.set(r.userId, parsePersonalDmPrefs(r.value));
+  return out;
+}
+
+export async function setPersonalDmPrefs(
+  userId: string,
+  prefs: PersonalDmPrefs,
+): Promise<void> {
+  await db.appSetting.upsert({
+    where: { userId_key: { userId, key: PERSONAL_KEY } },
+    create: { userId, key: PERSONAL_KEY, value: prefs },
+    update: { value: prefs },
   });
 }

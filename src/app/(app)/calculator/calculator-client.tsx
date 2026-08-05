@@ -3,7 +3,7 @@
 import * as React from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Calculator, NotebookPen, RefreshCw } from "lucide-react";
 
@@ -29,6 +29,9 @@ import { Badge } from "@/components/ui/badge";
 import { InstrumentCombobox } from "@/components/instrument-combobox";
 import { ACCOUNT_CURRENCIES, findForexPair } from "@/lib/calc/forex-pairs";
 import { cn } from "@/lib/utils";
+// Type-only: symbol-history.ts is server-only, and `import type` is erased
+// before bundling, so nothing server-side follows this into the client.
+import type { SymbolHistory } from "@/lib/journal/symbol-history";
 
 // ──────────────────────────────────────────────────────────────────────
 // Types (mirror /api/calc/position-size response)
@@ -614,6 +617,8 @@ export function CalculatorClient() {
             </TabsContent>
           </Tabs>
 
+          <SymbolHistoryStrip symbol={state.symbol} />
+
           <Button
             type="button"
             className="w-full"
@@ -660,6 +665,117 @@ function Field({
       </span>
       {children}
     </label>
+  );
+}
+
+const fmtAmount = (n: number, dp = 2) =>
+  new Intl.NumberFormat("en-US", {
+    minimumFractionDigits: dp,
+    maximumFractionDigits: dp,
+  }).format(n);
+
+/** Signed on purpose: "+120.00" vs "-120.00" reads faster than colour alone. */
+const fmtSigned = (n: number, dp = 2) =>
+  `${n > 0 ? "+" : ""}${fmtAmount(n, dp)}`;
+
+const fmtDayMonth = (iso: string) => {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleDateString("vi-VN", { day: "2-digit", month: "2-digit" });
+};
+
+/**
+ * The user's own record on this symbol, read back from their journal while
+ * they size the next position on it. Facts only — counts, averages and the
+ * last few results. It draws no conclusion and suggests no action.
+ *
+ * Renders nothing when there is no history (an empty widget is clutter) and
+ * stays silent while loading or on error — this is a bonus, never something
+ * the calculator should apologise for.
+ *
+ * Deliberately a copy of the strip in the journal's trade form rather than a
+ * shared import: the two live in different route trees and neither should pull
+ * the other's page bundle in for forty lines of markup.
+ */
+function SymbolHistoryStrip({ symbol }: { symbol: string }) {
+  // Symbols arrive from a combobox here, but debounce anyway — switching
+  // instruments a few times in a row shouldn't fire a request per keystroke.
+  const [query, setQuery] = React.useState(() => symbol.trim().toUpperCase());
+  React.useEffect(() => {
+    const t = setTimeout(() => setQuery(symbol.trim().toUpperCase()), 300);
+    return () => clearTimeout(t);
+  }, [symbol]);
+
+  const history = useQuery<SymbolHistory>({
+    queryKey: ["journal", "symbol-history", query],
+    enabled: query.length > 0,
+    staleTime: 60_000,
+    queryFn: async ({ signal }) => {
+      const url = new URL(
+        "/api/journal/symbol-history",
+        window.location.origin,
+      );
+      url.searchParams.set("symbol", query);
+      const res = await fetch(url, { signal });
+      if (!res.ok) {
+        const j = (await res.json().catch(() => null)) as
+          | { error?: string }
+          | null;
+        throw new Error(j?.error ?? "Không tải được lịch sử symbol");
+      }
+      return (await res.json()) as SymbolHistory;
+    },
+  });
+
+  const data = history.data;
+  if (!data || (data.closedTrades === 0 && data.openTrades === 0)) return null;
+
+  return (
+    <div className="space-y-1 rounded-md border border-border/60 bg-muted/30 p-2.5 text-xs text-muted-foreground">
+      <p>
+        <span className="num font-medium text-foreground">{data.symbol}</span>
+        {data.closedTrades > 0
+          ? ` — bạn đã đóng ${data.closedTrades} lệnh: ${data.wins} thắng / ${data.losses} thua`
+          : " — chưa có lệnh nào đã đóng"}
+        {data.breakEven > 0 ? ` / ${data.breakEven} hoà` : ""}
+        {data.withPnl < data.closedTrades
+          ? ` (${data.closedTrades - data.withPnl} lệnh chưa có P/L)`
+          : ""}
+        {data.openTrades > 0 ? ` · đang mở ${data.openTrades}` : ""}
+      </p>
+      {data.closedTrades > 0 ? (
+        <p>
+          R trung bình{" "}
+          <span className="num text-foreground">
+            {data.avgR === null ? "—" : `${fmtSigned(data.avgR)}R`}
+          </span>
+          {/* Say what the average is built on whenever it isn't every trade —
+              "0/14 lệnh có R" is the honest reason the value reads "—". */}
+          {data.withR < data.closedTrades
+            ? ` (${data.withR}/${data.closedTrades} lệnh có R)`
+            : ""}
+          {" · tổng P/L "}
+          <span className="num text-foreground">
+            {data.totalPnl === null
+              ? "—"
+              : `${data.currency} ${fmtSigned(data.totalPnl)}`}
+          </span>
+        </p>
+      ) : null}
+      {data.recent.length > 0 ? (
+        <p className="num">
+          Gần nhất:{" "}
+          {data.recent
+            .map(
+              (t) =>
+                `${t.direction} ${fmtDayMonth(t.closedAt ?? t.openedAt)} ${
+                  t.pnl === null ? "—" : fmtSigned(t.pnl)
+                }`,
+            )
+            .join(" · ")}
+        </p>
+      ) : null}
+    </div>
   );
 }
 

@@ -63,16 +63,26 @@ export async function GET() {
   let todayPnl = 0;
   let wins30 = 0;
   let closed30 = 0;
+  // Win-rate denominator counts only trades whose outcome we actually KNOW.
+  // A closed trade with no P&L is unknown, not a loss — auto-close creates
+  // those in bulk (MEXC/OKX give us no exit figure, so the row waits for the
+  // user to type the real one). Dividing by every closed trade turned a 5/10
+  // record into "WR 25%" as soon as 10 unknown closes landed.
+  let scored30 = 0;
   let rSum30 = 0;
   let rCount30 = 0;
   for (const t of closedAll) {
-    const pnl = t.pnl !== null ? Number(t.pnl) : 0;
+    const known = t.pnl !== null;
+    const pnl = known ? Number(t.pnl) : 0;
     equity += pnl;
     series.push({ t: t.closedAt!.toISOString(), equity: Number(equity.toFixed(2)) });
     if (t.closedAt! >= todayStart) todayPnl += pnl;
     if (t.closedAt! >= d30) {
       closed30 += 1;
-      if (pnl > 0) wins30 += 1;
+      if (known) {
+        scored30 += 1;
+        if (pnl > 0) wins30 += 1;
+      }
       if (t.rMultiple !== null) {
         rSum30 += Number(t.rMultiple);
         rCount30 += 1;
@@ -102,7 +112,10 @@ export async function GET() {
       todayPnl: Number(todayPnl.toFixed(2)),
       openCount,
       closed30,
-      winRate30: closed30 > 0 ? wins30 / closed30 : null,
+      // Sent alongside closed30 so the client can say which number the
+      // percentage was computed over instead of implying it used closed30.
+      scored30,
+      winRate30: scored30 > 0 ? wins30 / scored30 : null,
       avgR30: rCount30 > 0 ? Number((rSum30 / rCount30).toFixed(2)) : null,
     },
     equitySeries: series.slice(-200),

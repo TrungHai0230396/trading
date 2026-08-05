@@ -29,6 +29,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
+import { Switch } from "@/components/ui/switch";
 import {
   Select,
   SelectContent,
@@ -2129,10 +2130,18 @@ export function OkxBrokerCard() {
 // Telegram notify card (system bot, one-tap link)
 // ────────────────────────────────────────────────────────────────────
 
-type TgStatus = { enabled: boolean; connected: boolean };
+/** Opt-ins for the two DMs about the user's OWN journal. Both default OFF. */
+type DmPrefs = { weeklyDigest: boolean; levelWatch: boolean };
+
+type TgStatus = {
+  enabled: boolean;
+  connected: boolean;
+  prefs?: DmPrefs;
+};
 
 export function TelegramNotifyCard() {
   const [status, setStatus] = React.useState<TgStatus | null>(null);
+  const [prefs, setPrefs] = React.useState<DmPrefs | null>(null);
   const [connecting, setConnecting] = React.useState(false);
   // Deep link kept in state so there is always a tappable way into Telegram
   // even when the popup never opened. Good for ~30 min (see telegram-link.ts).
@@ -2148,12 +2157,36 @@ export function TelegramNotifyCard() {
         r.json(),
       )) as TgStatus;
       setStatus(s);
+      if (s.prefs) setPrefs(s.prefs);
       return s;
     } catch {
       setStatus({ enabled: false, connected: false });
       return null;
     }
   }, []);
+
+  /**
+   * Saved on toggle rather than behind a Save button — two switches don't
+   * warrant a form. Optimistic so the switch doesn't lag; reverts on failure
+   * so it never shows an "on" the server didn't take.
+   */
+  const savePref = async (key: keyof DmPrefs, value: boolean) => {
+    if (!prefs) return;
+    const before = prefs;
+    const next = { ...prefs, [key]: value };
+    setPrefs(next);
+    try {
+      const res = await fetch("/api/notify/telegram", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(next),
+      });
+      if (!res.ok) throw new Error(String(res.status));
+    } catch {
+      setPrefs(before);
+      toast.error("Không lưu được tuỳ chọn. Thử lại.");
+    }
+  };
 
   React.useEffect(() => {
     void refresh();
@@ -2274,16 +2307,62 @@ export function TelegramNotifyCard() {
             Kênh Telegram chưa được bật trên hệ thống. Vui lòng thử lại sau.
           </p>
         ) : status.connected ? (
-          <div className="flex flex-wrap items-center gap-2">
-            <p className="flex-1 text-sm text-muted-foreground">
-              Bạn đang nhận thông báo qua bot Nhật Ký Trade. Muốn dừng thì gõ{" "}
-              <code className="rounded bg-muted px-1">/stop</code> trong
-              Telegram, hoặc:
-            </p>
-            <Button variant="destructive" size="sm" onClick={disconnect}>
-              <Trash2 className="size-4" />
-              Ngắt kết nối
-            </Button>
+          <div className="space-y-4">
+            <div className="flex flex-wrap items-center gap-2">
+              <p className="flex-1 text-sm text-muted-foreground">
+                Bạn đang nhận thông báo qua bot Nhật Ký Trade. Muốn dừng thì gõ{" "}
+                <code className="rounded bg-muted px-1">/stop</code> trong
+                Telegram, hoặc:
+              </p>
+              <Button variant="destructive" size="sm" onClick={disconnect}>
+                <Trash2 className="size-4" />
+                Ngắt kết nối
+              </Button>
+            </div>
+
+            <Separator />
+
+            {/* Tin nhắn về nhật ký của chính người dùng — mặc định TẮT. */}
+            <div className="space-y-2">
+              <p className="text-sm font-medium">Tin nhắn về nhật ký của bạn</p>
+              {prefs === null ? (
+                <p className="text-xs text-muted-foreground">Đang tải…</p>
+              ) : (
+                <>
+                  <label className="flex cursor-pointer items-start justify-between gap-3 rounded-md border bg-card/40 px-3 py-2.5">
+                    <span className="space-y-0.5">
+                      <span className="block text-sm">Tổng kết tuần</span>
+                      <span className="block text-xs text-muted-foreground">
+                        Sáng thứ Hai, gửi số liệu tuần vừa rồi: số lệnh đã
+                        đóng, thắng/thua, tổng R, P/L, phí, số lệnh chưa có ghi
+                        chú. Tuần nào không đóng lệnh nào thì không gửi gì.
+                      </span>
+                    </span>
+                    <Switch
+                      className="mt-0.5 shrink-0"
+                      checked={prefs.weeklyDigest}
+                      onCheckedChange={(v) => savePref("weeklyDigest", !!v)}
+                    />
+                  </label>
+
+                  <label className="flex cursor-pointer items-start justify-between gap-3 rounded-md border bg-card/40 px-3 py-2.5">
+                    <span className="space-y-0.5">
+                      <span className="block text-sm">Báo chạm SL / TP</span>
+                      <span className="block text-xs text-muted-foreground">
+                        Khi giá chạm mức SL hoặc TP bạn đã ghi trong một lệnh
+                        đang mở, bot nhắn một lần cho mỗi mức. Chỉ áp dụng cho
+                        lệnh CRYPTO có cặp trên Binance.
+                      </span>
+                    </span>
+                    <Switch
+                      className="mt-0.5 shrink-0"
+                      checked={prefs.levelWatch}
+                      onCheckedChange={(v) => savePref("levelWatch", !!v)}
+                    />
+                  </label>
+                </>
+              )}
+            </div>
           </div>
         ) : (
           <div className="space-y-3">

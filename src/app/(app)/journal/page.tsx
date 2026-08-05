@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { ChartColumn, Download, Plus } from "lucide-react";
+import { ChartColumn, Download, Plus, SearchX } from "lucide-react";
 import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
 import { JournalClient } from "./journal-client";
@@ -17,6 +17,10 @@ export default function JournalPage() {
             <Button variant="outline" render={<Link href="/journal/systems" />}>
               <ChartColumn className="size-4" />
               Phân tích hệ thống
+            </Button>
+            <Button variant="outline" render={<Link href="/journal/review" />}>
+              <SearchX className="size-4" />
+              Điều gì lấy tiền của bạn
             </Button>
             <Button variant="outline" render={<Link href="/journal/import" />}>
               <Download className="size-4" />
