@@ -51,5 +51,8 @@ export type JournalStats = {
 
 export type TradeListResponse = {
   items: SerializedTrade[];
-  nextCursor: string | null;
+  total: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
 };

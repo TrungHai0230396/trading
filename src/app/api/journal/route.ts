@@ -26,6 +26,9 @@ export async function GET(req: Request) {
     from: url.searchParams.get("from") ?? undefined,
     to: url.searchParams.get("to") ?? undefined,
     cursor: url.searchParams.get("cursor") ?? undefined,
+    sort: url.searchParams.get("sort") ?? undefined,
+    dir: url.searchParams.get("dir") ?? undefined,
+    page: url.searchParams.get("page") ?? undefined,
     limit: url.searchParams.get("limit") ?? undefined,
   });
 
@@ -59,20 +62,30 @@ export async function GET(req: Request) {
       : {}),
   };
 
-  const items = await db.tradeJournal.findMany({
-    where,
-    orderBy: [{ openedAt: "desc" }, { id: "desc" }],
-    take: limit + 1,
-    ...(q.cursor ? { cursor: { id: q.cursor }, skip: 1 } : {}),
-  });
-
-  const hasMore = items.length > limit;
-  const slice = hasMore ? items.slice(0, limit) : items;
-  const nextCursor = hasMore ? slice[slice.length - 1]?.id ?? null : null;
+  // Offset paging + a count, so the client can render real page numbers and
+  // jump. Two queries instead of one, which is the price of being able to go
+  // straight to page 5; ([userId, openedAt]) is indexed and a personal journal
+  // is thousands of rows at most, so the count is cheap here.
+  const page = q.page ?? 1;
+  const [total, items] = await Promise.all([
+    db.tradeJournal.count({ where }),
+    db.tradeJournal.findMany({
+      where,
+      // `id` is always the tiebreaker: two trades opened in the same minute, or
+      // sharing a null P&L, would otherwise come back in an unstable order and
+      // a row could repeat on one page while vanishing from another.
+      orderBy: [{ [q.sort ?? "openedAt"]: q.dir ?? "desc" }, { id: "desc" }],
+      take: limit,
+      skip: (page - 1) * limit,
+    }),
+  ]);
 
   return NextResponse.json({
-    items: slice.map(serializeTrade),
-    nextCursor,
+    items: items.map(serializeTrade),
+    total,
+    page,
+    pageSize: limit,
+    totalPages: Math.max(1, Math.ceil(total / limit)),
   });
 }
 

@@ -3,7 +3,6 @@
 import * as React from "react";
 import Link from "next/link";
 import {
-  useInfiniteQuery,
   useMutation,
   useQuery,
   useQueryClient,
@@ -13,7 +12,9 @@ import { format, formatDistanceToNow, parseISO } from "date-fns";
 import { vi } from "date-fns/locale";
 import { toast } from "sonner";
 import {
+  ArrowUpDown,
   BookOpenText,
+  ChevronLeft,
   ChevronRight,
   Filter,
   Loader2,
@@ -74,6 +75,10 @@ const INITIAL_FILTERS: Filters = {
 };
 
 const PAGE_SIZE = 50;
+
+/** Sortable columns — must match the whitelist in tradeListQuerySchema. */
+type SortKey = "openedAt" | "symbol" | "status" | "lotSize" | "pnl" | "rMultiple";
+type SortDir = "asc" | "desc";
 
 // ──────────────────────────────────────────────────────────────────────
 // Utility formatters
@@ -138,17 +143,46 @@ export function JournalClient() {
     [filters.market, filters.status, debouncedSymbol, filters.from, filters.to],
   );
 
+  const [sort, setSort] = React.useState<SortKey>("openedAt");
+  const [dir, setDir] = React.useState<SortDir>("desc");
+
+  // Page number, reset whenever the filters OR the sort change: re-sorting
+  // while parked on page 5 shows a slice of a list the user never saw the top
+  // of, and filtering there lands them on an empty page of a 1-page result.
+  const [page, setPage] = React.useState(1);
+  React.useEffect(() => {
+    setPage(1);
+  }, [
+    filters.market,
+    filters.status,
+    debouncedSymbol,
+    filters.from,
+    filters.to,
+    sort,
+    dir,
+  ]);
+
+  /** Click a header: same column flips direction, a new column starts desc. */
+  const toggleSort = React.useCallback((key: SortKey) => {
+    setSort((prev) => {
+      if (prev === key) {
+        setDir((d) => (d === "desc" ? "asc" : "desc"));
+        return prev;
+      }
+      setDir("desc");
+      return key;
+    });
+  }, []);
+
   /**
-   * Paged, not capped. This used to be a plain useQuery asking for 50 rows and
-   * rendering whatever came back — so a journal with 200 trades showed the
-   * first 50 and the rest were simply unreachable, with nothing on screen
-   * saying so. The API had cursor pagination all along; the client just never
-   * asked for page two.
+   * Offset paging, not a cursor. The list used to fetch 50 rows and stop, so a
+   * journal with 200 trades silently became a journal with 50. A cursor fixes
+   * that but only steps forward — and browsing a journal means "jump back to
+   * March", so the page number is the affordance that actually matches the task.
    */
-  const list = useInfiniteQuery<TradeListResponse>({
-    queryKey,
-    initialPageParam: null,
-    queryFn: async ({ signal, pageParam }) => {
+  const list = useQuery<TradeListResponse>({
+    queryKey: [...queryKey, page, sort, dir],
+    queryFn: async ({ signal }) => {
       const url = new URL("/api/journal", window.location.origin);
       if (filters.market !== "ALL") url.searchParams.set("market", filters.market);
       if (filters.status !== "ALL") url.searchParams.set("status", filters.status);
@@ -156,7 +190,9 @@ export function JournalClient() {
       if (filters.from) url.searchParams.set("from", filters.from);
       if (filters.to) url.searchParams.set("to", filters.to);
       url.searchParams.set("limit", String(PAGE_SIZE));
-      if (pageParam) url.searchParams.set("cursor", String(pageParam));
+      url.searchParams.set("page", String(page));
+      url.searchParams.set("sort", sort);
+      url.searchParams.set("dir", dir);
       const res = await fetch(url, { signal });
       if (!res.ok) {
         const j = (await res.json().catch(() => null)) as
@@ -166,15 +202,12 @@ export function JournalClient() {
       }
       return (await res.json()) as TradeListResponse;
     },
-    getNextPageParam: (last) => last.nextCursor,
     placeholderData: keepPreviousData,
   });
 
-  // Flattened rows — every component below reads this instead of a single page.
-  const items = React.useMemo(
-    () => (list.data?.pages ?? []).flatMap((p) => p.items),
-    [list.data],
-  );
+  const items = list.data?.items ?? [];
+  const totalPages = list.data?.totalPages ?? 1;
+  const total = list.data?.total ?? 0;
 
   const stats = useQuery<JournalStatsResponse>({
     queryKey: ["journal", "stats"],
@@ -453,33 +486,175 @@ export function JournalClient() {
             items={items}
             currency={stats.data?.currency ?? "USD"}
             quotes={quoteByTradeId}
+            sort={sort}
+            dir={dir}
+            onSort={toggleSort}
           />
 
-          {/* Always state how many rows are on screen. Showing 50 of 200 with
-              no indication is how a user concludes their trades were lost. */}
-          {items.length > 0 ? (
-            <div className="mt-4 flex flex-col items-center gap-2">
-              {list.hasNextPage ? (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => list.fetchNextPage()}
-                  disabled={list.isFetchingNextPage}
-                >
-                  {list.isFetchingNextPage ? (
-                    <Loader2 className="size-4 animate-spin" />
-                  ) : null}
-                  Xem thêm {PAGE_SIZE} lệnh
-                </Button>
-              ) : null}
-              <p className="text-[11px] text-muted-foreground">
-                Đang hiện {items.length} lệnh
-                {list.hasNextPage ? " — còn nữa" : " (hết)"}
-              </p>
-            </div>
+          {total > 0 ? (
+            <Pagination
+              page={page}
+              totalPages={totalPages}
+              total={total}
+              pageSize={PAGE_SIZE}
+              loading={list.isFetching}
+              onChange={setPage}
+            />
           ) : null}
         </CardContent>
       </Card>
+    </div>
+  );
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// Sortable column header
+// ──────────────────────────────────────────────────────────────────────
+
+function SortHeader({
+  k,
+  sort,
+  dir,
+  onSort,
+  align = "left",
+  children,
+}: {
+  k: SortKey;
+  sort: SortKey;
+  dir: SortDir;
+  onSort: (k: SortKey) => void;
+  align?: "left" | "right";
+  children: React.ReactNode;
+}) {
+  const active = sort === k;
+  return (
+    <button
+      type="button"
+      onClick={() => onSort(k)}
+      // aria-sort belongs on the <th>, but the arrow alone would leave a
+      // screen-reader user with no idea the column is sortable at all.
+      aria-label={`Sắp xếp theo ${typeof children === "string" ? children : k}`}
+      className={cn(
+        "inline-flex w-full items-center gap-1 hover:text-foreground",
+        align === "right" ? "justify-end" : "justify-start",
+        active ? "text-foreground" : "",
+      )}
+    >
+      {children}
+      <ArrowUpDown
+        className={cn(
+          "size-3 shrink-0 transition-opacity",
+          active ? "opacity-100" : "opacity-30",
+        )}
+      />
+      {active ? (
+        <span className="sr-only">
+          {dir === "asc" ? "tăng dần" : "giảm dần"}
+        </span>
+      ) : null}
+    </button>
+  );
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// Pagination
+// ──────────────────────────────────────────────────────────────────────
+
+/**
+ * Page numbers around the current page, with "…" standing in for the runs we
+ * skip. First and last are always present so "jump to the very beginning /
+ * end" never takes more than one click.
+ */
+function pageWindow(page: number, totalPages: number): (number | "gap")[] {
+  if (totalPages <= 7) {
+    return Array.from({ length: totalPages }, (_, i) => i + 1);
+  }
+  const out: (number | "gap")[] = [1];
+  const from = Math.max(2, page - 1);
+  const to = Math.min(totalPages - 1, page + 1);
+  if (from > 2) out.push("gap");
+  for (let i = from; i <= to; i++) out.push(i);
+  if (to < totalPages - 1) out.push("gap");
+  out.push(totalPages);
+  return out;
+}
+
+function Pagination({
+  page,
+  totalPages,
+  total,
+  pageSize,
+  loading,
+  onChange,
+}: {
+  page: number;
+  totalPages: number;
+  total: number;
+  pageSize: number;
+  loading: boolean;
+  onChange: (p: number) => void;
+}) {
+  const first = (page - 1) * pageSize + 1;
+  const last = Math.min(page * pageSize, total);
+
+  return (
+    <div className="mt-4 flex flex-col items-center gap-2">
+      {totalPages > 1 ? (
+        <div className="flex flex-wrap items-center justify-center gap-1">
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={page <= 1 || loading}
+            onClick={() => onChange(page - 1)}
+            aria-label="Trang trước"
+          >
+            <ChevronLeft className="size-4" />
+          </Button>
+
+          {pageWindow(page, totalPages).map((p, i) =>
+            p === "gap" ? (
+              <span
+                key={`gap-${i}`}
+                className="px-1 text-xs text-muted-foreground"
+              >
+                …
+              </span>
+            ) : (
+              <Button
+                key={p}
+                variant={p === page ? "default" : "outline"}
+                size="sm"
+                className="min-w-9 tabular-nums"
+                disabled={loading}
+                onClick={() => onChange(p)}
+                aria-current={p === page ? "page" : undefined}
+              >
+                {p}
+              </Button>
+            ),
+          )}
+
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={page >= totalPages || loading}
+            onClick={() => onChange(page + 1)}
+            aria-label="Trang sau"
+          >
+            <ChevronRight className="size-4" />
+          </Button>
+        </div>
+      ) : null}
+
+      {/* Always say which slice of what is on screen — showing 50 of 200 with
+          no indication is how a user concludes their trades were lost. */}
+      <p className="text-[11px] text-muted-foreground">
+        {loading ? (
+          <Loader2 className="mr-1 inline size-3 animate-spin align-[-1px]" />
+        ) : null}
+        Hiện {first}–{last} trong {total} lệnh
+        {totalPages > 1 ? ` · trang ${page}/${totalPages}` : ""}
+      </p>
     </div>
   );
 }
@@ -614,12 +789,18 @@ function TradeTable({
   items,
   currency,
   quotes,
+  sort,
+  dir,
+  onSort,
 }: {
   loading: boolean;
   error: string | null;
   items: SerializedTrade[];
   currency: string;
   quotes: Map<string, LiveQuote>;
+  sort: SortKey;
+  dir: SortDir;
+  onSort: (k: SortKey) => void;
 }) {
   if (loading) {
     return (
@@ -661,14 +842,41 @@ function TradeTable({
     <Table className="max-lg:[&_td]:px-1.5 max-lg:[&_th]:px-1.5 max-lg:[&_th]:text-xs">
       <TableHeader>
         <TableRow>
-          <TableHead className="max-lg:hidden">Thời gian mở</TableHead>
-          <TableHead>Symbol</TableHead>
+          <TableHead>
+            <SortHeader k="symbol" sort={sort} dir={dir} onSort={onSort}>
+              Symbol
+            </SortHeader>
+          </TableHead>
           <TableHead className="max-lg:hidden">Hướng</TableHead>
-          <TableHead>Trạng thái</TableHead>
+          <TableHead>
+            <SortHeader k="status" sort={sort} dir={dir} onSort={onSort}>
+              Trạng thái
+            </SortHeader>
+          </TableHead>
           <TableHead className="text-right max-lg:hidden">Vào / Ra</TableHead>
-          <TableHead className="text-right max-lg:hidden">Lot</TableHead>
-          <TableHead className="text-right">P/L ({currency})</TableHead>
-          <TableHead className="text-right">R</TableHead>
+          <TableHead className="text-right max-lg:hidden">
+            <SortHeader k="lotSize" sort={sort} dir={dir} onSort={onSort} align="right">
+              Lot
+            </SortHeader>
+          </TableHead>
+          <TableHead className="text-right">
+            <SortHeader k="pnl" sort={sort} dir={dir} onSort={onSort} align="right">
+              P/L ({currency})
+            </SortHeader>
+          </TableHead>
+          <TableHead className="text-right">
+            <SortHeader k="rMultiple" sort={sort} dir={dir} onSort={onSort} align="right">
+              R
+            </SortHeader>
+          </TableHead>
+          {/* Moved to the end: the symbol and the result are what a trader
+              scans for; the timestamp is context you read once you've found
+              the row, so it no longer occupies the leftmost column. */}
+          <TableHead className="max-lg:hidden">
+            <SortHeader k="openedAt" sort={sort} dir={dir} onSort={onSort}>
+              Thời gian mở
+            </SortHeader>
+          </TableHead>
           <TableHead className="max-lg:hidden"></TableHead>
         </TableRow>
       </TableHeader>
@@ -703,12 +911,6 @@ function TradeRow({
 
   return (
     <TableRow>
-      <TableCell className="text-sm max-lg:hidden">
-        <div>{format(opened, "yyyy-MM-dd HH:mm")}</div>
-        <div className="text-xs text-muted-foreground">
-          {formatDistanceToNow(opened, { addSuffix: true, locale: vi })}
-        </div>
-      </TableCell>
       {/* Wraps instead of nowrap below lg: a long broker symbol would
           otherwise widen the table and push P/L back off a phone screen. */}
       <TableCell className="max-lg:whitespace-normal">
@@ -797,6 +999,12 @@ function TradeRow({
         )}
       >
         {trade.rMultiple === null ? "—" : `${trade.rMultiple.toFixed(2)}R`}
+      </TableCell>
+      <TableCell className="text-sm max-lg:hidden">
+        <div>{format(opened, "yyyy-MM-dd HH:mm")}</div>
+        <div className="text-xs text-muted-foreground">
+          {formatDistanceToNow(opened, { addSuffix: true, locale: vi })}
+        </div>
       </TableCell>
       <TableCell className="text-right max-lg:hidden">
         <Button

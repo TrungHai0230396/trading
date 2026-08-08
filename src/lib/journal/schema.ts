@@ -183,6 +183,23 @@ export const tradeListQuerySchema = z.object({
       message: "to không hợp lệ",
     }),
   cursor: z.string().trim().min(1).max(64).optional(),
+  /** Column to order by. Only whitelisted names — never raw user input. */
+  sort: z
+    .enum(["openedAt", "symbol", "status", "lotSize", "pnl", "rMultiple"])
+    .optional(),
+  dir: z.enum(["asc", "desc"]).optional(),
+  /**
+   * 1-based page. Offset paging rather than the cursor above, because the
+   * journal is something people BROWSE — "jump to March" is the actual task,
+   * and a cursor can only ever step forward one page from where you stand.
+   */
+  page: z
+    .string()
+    .optional()
+    .transform((v) => (v ? Number(v) : undefined))
+    .refine((n) => n === undefined || (Number.isInteger(n) && n >= 1), {
+      message: "page phải là số nguyên ≥ 1",
+    }),
   limit: z
     .string()
     .optional()
