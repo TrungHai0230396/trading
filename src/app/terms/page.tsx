@@ -7,6 +7,7 @@
  */
 
 import Link from "next/link";
+import { OptionalAppShell } from "@/components/optional-app-shell";
 import { PublicPageExit } from "@/components/public-page-exit";
 
 export const metadata = {
@@ -15,8 +16,9 @@ export const metadata = {
 
 const UPDATED = "07/07/2026";
 
-export default function TermsPage() {
+export default async function TermsPage() {
   return (
+    <OptionalAppShell>
     <div className="mx-auto max-w-3xl px-6 py-12">
       <h1 className="text-2xl font-semibold tracking-tight">
         Điều khoản sử dụng & Miễn trừ trách nhiệm
@@ -135,5 +137,6 @@ export default function TermsPage() {
         </Link>
       </div>
     </div>
+    </OptionalAppShell>
   );
 }

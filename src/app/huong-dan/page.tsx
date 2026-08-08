@@ -9,6 +9,7 @@
  */
 
 import Link from "next/link";
+import { OptionalAppShell } from "@/components/optional-app-shell";
 import { PublicPageExit } from "@/components/public-page-exit";
 import {
   BookOpenText,
@@ -62,8 +63,9 @@ function Step({ n, children }: { n: number; children: React.ReactNode }) {
   );
 }
 
-export default function GuidePage() {
+export default async function GuidePage() {
   return (
+    <OptionalAppShell>
     <div className="mx-auto max-w-3xl px-6 py-12">
       <h1 className="text-2xl font-semibold tracking-tight">
         Hướng dẫn sử dụng
@@ -355,5 +357,6 @@ export default function GuidePage() {
         </Link>
       </div>
     </div>
+    </OptionalAppShell>
   );
 }

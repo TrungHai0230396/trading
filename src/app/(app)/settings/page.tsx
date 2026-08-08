@@ -13,6 +13,7 @@ import {
   TelegramNotifyCard,
 } from "./brokers-client";
 import { AccountCard } from "./account-client";
+import { ScrollToHash } from "@/components/scroll-to-hash";
 
 export default async function SettingsPage() {
   const session = await auth();
@@ -26,6 +27,10 @@ export default async function SettingsPage() {
 
   return (
     <div className="mx-auto max-w-5xl">
+      {/* /scanner links here as /settings#telegram when the user has no
+          Telegram connection. This page awaits the session and a user row, so
+          the card does not exist when the browser looks for the hash. */}
+      <ScrollToHash />
       <PageHeader
         title="Cài đặt"
         description="Kết nối sàn, thông báo và thông tin tài khoản."

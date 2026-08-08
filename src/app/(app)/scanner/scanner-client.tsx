@@ -1579,6 +1579,24 @@ function StaleResultBanner({
 
 type WatchlistItem = { id: string; symbol: string; market: string };
 
+/**
+ * Is Telegram actually able to deliver? Shared by the watchlist panel and the
+ * follow toast, because on a phone the panel now sits BELOW the results — so
+ * someone tapping 🔔 in the table never sees the panel's warning.
+ */
+function useTelegramReady() {
+  const q = useQuery<{ enabled: boolean; connected: boolean }>({
+    queryKey: ["notify", "telegram", "status"],
+    queryFn: async () => {
+      const res = await fetch("/api/notify/telegram");
+      if (!res.ok) throw new Error("telegram");
+      return (await res.json()) as { enabled: boolean; connected: boolean };
+    },
+    staleTime: 60_000,
+  });
+  return q;
+}
+
 function useWatchlist() {
   const queryClient = useQueryClient();
   const list = useQuery<{ items: WatchlistItem[] }>({
@@ -1603,6 +1621,17 @@ function useWatchlist() {
       return j as WatchlistItem;
     },
     onSuccess: (item) => {
+      // Don't promise a message the account cannot receive.
+      const ready = queryClient.getQueryData<{
+        enabled: boolean;
+        connected: boolean;
+      }>(["notify", "telegram", "status"]);
+      if (ready && (!ready.connected || !ready.enabled)) {
+        toast.success(
+          `Đã theo dõi ${item.symbol}. Chưa nối Telegram nên chưa nhận được tin — vào Cài đặt để nối.`,
+        );
+        return;
+      }
       toast.success(
         `Đã theo dõi ${item.symbol} — sẽ nhắn Telegram khi trạng thái đồng thuận thay đổi (đạt mới / mất).`,
       );
@@ -1645,6 +1674,15 @@ function WatchlistPanel() {
   const queryClient = useQueryClient();
   const [input, setInput] = React.useState("");
   const items = list.data?.items ?? [];
+
+  // Whole panel promises Telegram messages. Without this check a user could
+  // follow coins, toggle the bell and be told "sẽ nhắn Telegram" while nothing
+  // could ever arrive — a silent dead end with no explanation on screen.
+  const tg = useTelegramReady();
+  // Only warn on a KNOWN-bad state: while loading, tg.data is undefined and a
+  // warning would flash on every visit for users who are perfectly set up.
+  const tgMissing = tg.data ? !tg.data.connected : false;
+  const tgDisabled = tg.data ? !tg.data.enabled : false;
 
   // Default TF set (global consensus config) + per-coin overrides.
   const config = useQuery<{ config: ConsensusAlertConfig }>({
@@ -1717,6 +1755,34 @@ function WatchlistPanel() {
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
+        {/* Placed above the input, not below the list: the point is to be seen
+            BEFORE the user spends time curating a watchlist that cannot
+            notify them. Following coins still works — the list is also read by
+            the results table — so this informs rather than blocks. */}
+        {tgDisabled ? (
+          <p className="rounded-md border border-dashed p-2.5 text-xs text-muted-foreground">
+            Kênh Telegram chưa được bật trên hệ thống, nên hiện chưa gửi được
+            thông báo. Bạn vẫn theo dõi coin bình thường.
+          </p>
+        ) : tgMissing ? (
+          <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-warning/40 bg-warning/5 p-2.5">
+            <p className="text-xs leading-relaxed text-muted-foreground">
+              Bạn <strong className="text-foreground">chưa nối Telegram</strong>{" "}
+              nên sẽ không nhận được tin nào. Theo dõi coin vẫn lưu lại bình
+              thường.
+            </p>
+            <Button
+              size="xs"
+              variant="outline"
+              // Anchor, not just /settings: the Telegram card sits below four
+              // broker cards, so a bare link drops the user at the top and
+              // makes them hunt for the thing they were just told to do.
+              render={<Link href="/settings#telegram" />}
+            >
+              Nối Telegram
+            </Button>
+          </div>
+        ) : null}
         <div className="flex gap-2">
           <Input
             className="num flex-1"

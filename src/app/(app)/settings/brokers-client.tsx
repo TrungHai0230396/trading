@@ -2326,7 +2326,12 @@ export function TelegramNotifyCard() {
   };
 
   return (
-    <Card>
+    // Anchor + highlight for /settings#telegram. The watchlist panel on
+    // /scanner links here when the user has no Telegram connection, and this
+    // card sits below four broker cards — landing at the top of Settings and
+    // making them hunt is what the link is meant to avoid. scroll-mt clears
+    // the sticky header so the card is not cut off at the top.
+    <Card id="telegram" className="scroll-mt-24 target:ring-2 target:ring-primary/50">
       <CardHeader>
         <div className="flex items-start justify-between gap-2">
           <div>
