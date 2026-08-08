@@ -768,19 +768,16 @@ function PortfolioHero({
               </button>
             </p>
           ) : null}
-          {/* Say what is NOT in the number, not just what is. Someone whose
-              real money also sits in a forex account or a cold wallet must not
-              read this as their whole position. */}
-          <p className="text-[11px] leading-relaxed text-muted-foreground/70">
-            Chỉ tính {data.brokers.length} sàn bạn đã nối
-            {data.brokers.length > 0
-              ? ` (${data.brokers.map(brokerLabel).join(", ")})`
-              : ""}
-            . Không gồm ví ngoài sàn, tài khoản forex hay sàn chưa kết nối.
-          </p>
+          {/* Freshness only. The scope used to be spelled out here too, but the
+              title already says "đã kết nối" and the per-broker panels beside
+              it name the exchanges being counted — restating that in prose was
+              telling the reader what their eyes had already told them. The
+              read-only reassurance belongs where a key is handed over
+              (Settings) or where the screen resembles an order ticket (the
+              analysis action bar), not on a balance readout: repeated
+              everywhere, it stops being read anywhere. */}
           <p className="text-[11px] text-muted-foreground/70">
-            Cập nhật {format(parseISO(data.fetchedAt), "HH:mm")} · USDT-M ·
-            chỉ đọc, app không đặt lệnh
+            Cập nhật {format(parseISO(data.fetchedAt), "HH:mm")}
           </p>
         </div>
 
