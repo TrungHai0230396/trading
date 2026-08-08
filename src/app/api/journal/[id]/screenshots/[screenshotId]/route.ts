@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { db } from "@/lib/db";
+import { deleteStoredFile } from "@/lib/journal/screenshot-store";
 
 export async function DELETE(
   _req: Request,
@@ -19,7 +20,7 @@ export async function DELETE(
       tradeId: id,
       trade: { userId: session.user.id },
     },
-    select: { id: true },
+    select: { id: true, url: true },
   });
 
   if (!shot) {
@@ -27,6 +28,10 @@ export async function DELETE(
   }
 
   await db.tradeScreenshot.delete({ where: { id: screenshotId } });
+  // After the row is gone, so a failed unlink can never leave a row pointing
+  // at a file that no longer exists. The reverse — a file with no row — only
+  // wastes disk.
+  await deleteStoredFile(shot.url, session.user.id);
 
   return NextResponse.json({ ok: true });
 }

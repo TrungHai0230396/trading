@@ -435,8 +435,7 @@ export function ScannerClient() {
           </CardTitle>
           <CardDescription>
             Chọn coin và khung thời gian rồi bấm{" "}
-            <strong>Quét coin đã chọn</strong>. Top 10 Bullish/Bearish đồng
-            thuận là chức năng riêng, chỉ chạy khi bạn bấm nút quét Top 10.
+            <strong>Quét coin đã chọn</strong>.
           </CardDescription>
         </CardHeader>
 
@@ -592,9 +591,13 @@ export function ScannerClient() {
                 ? "Đang quét Top 10…"
                 : "Quét Top 10 đồng thuận"}
             </Button>
-            <p className="text-center text-xs text-muted-foreground">
-              Nút Top 10 chỉ chạy khi bạn chủ động bấm. Mặc định hệ thống chỉ
-              quét danh sách coin đã chọn.
+            {/* The button labels already say what each one scans. What they
+                can't say is where Top 10 looks and that it replaces the table
+                below — the two things that surprise a first-time user. */}
+            <p className="text-center text-xs leading-relaxed text-muted-foreground">
+              Top 10 quét trong 100 cặp USDT có khối lượng lớn nhất Binance,
+              không quét coin bạn đã chọn — bảng kết quả sẽ được thay bằng
+              Top 10.
             </p>
             {errorMessage ? (
               <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">
@@ -605,10 +608,15 @@ export function ScannerClient() {
         </CardContent>
       </Card>
 
-      <WatchlistPanel />
       </div>
 
-      <div className="space-y-3">
+      {/* Results are the SECOND grid child, so on a phone (single column, DOM
+          order) the stack is: cấu hình → kết quả → watchlist. Previously the
+          watchlist sat between the scan button and the results, and had to be
+          scrolled past after every single scan. On lg it spans both rows of
+          the right column, leaving the watchlist under the config on the
+          left — the desktop layout is unchanged. */}
+      <div className="space-y-3 lg:row-span-2">
         <StaleResultBanner
           savedAt={resultSavedAt}
           loading={runScan.isPending}
@@ -631,6 +639,8 @@ export function ScannerClient() {
           onSelectChart={selectChart}
         />
       </div>
+
+      <WatchlistPanel />
     </div>
   );
 }
@@ -725,8 +735,8 @@ function ResultsPanel({
         <CardHeader>
           <CardTitle className="text-base">Kết quả</CardTitle>
           <CardDescription>
-            Cấu hình bên trái rồi bấm <strong>Quét</strong> để xem điểm đồng
-            thuận theo từng symbol.
+            Cấu hình bên trái rồi bấm <strong>Quét coin đã chọn</strong> để xem
+            điểm đồng thuận theo từng symbol.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -745,8 +755,17 @@ function ResultsPanel({
           <div>
             <CardTitle className="text-base">Kết quả quét</CardTitle>
             <CardDescription>
-              {result.summary.length} symbol đã chọn · sắp xếp theo điểm giảm
-              dần
+              {result.summary.length > 0 ? (
+                <>
+                  {result.summary.length} symbol · sắp xếp theo điểm giảm dần.
+                  Điểm 100 = mọi khung Bullish, 0 = mọi khung Bearish,{" "}
+                  <em>Hỗn hợp</em> = các khung không cùng chiều.
+                </>
+              ) : (
+                // A Top-10 scan sends no symbols, so this table is empty by
+                // design — saying "0 symbol" made it look like a failure.
+                <>Quét Top 10 — xem hai danh sách bên dưới.</>
+              )}
             </CardDescription>
           </div>
           <Badge variant="outline" className="font-mono text-[11px]">
@@ -834,8 +853,8 @@ function ConsensusTopPanel({
   return (
     <div className="grid gap-3 xl:grid-cols-2">
       <ConsensusTopList
-        title="Top 10 Bullish đồng thuận"
-        description="Coin có tín hiệu Bullish đồng thuận trên toàn bộ khung đã chọn."
+        title="Coin Bullish mọi khung"
+        description="Mọi khung bạn chọn đều Bullish (điểm 100). Danh sách không xếp hạng — các coin ở đây mạnh ngang nhau theo thang điểm này, tối đa hiện 10 coin."
         rows={bullish}
         signal="BULLISH"
         emptyText="Chưa có coin Bullish đồng thuận tuyệt đối."
@@ -844,8 +863,8 @@ function ConsensusTopPanel({
         onSelectChart={onSelectChart}
       />
       <ConsensusTopList
-        title="Top 10 Bearish đồng thuận"
-        description="Coin có tín hiệu Bearish đồng thuận trên toàn bộ khung đã chọn."
+        title="Coin Bearish mọi khung"
+        description="Mọi khung bạn chọn đều Bearish (điểm 0). Danh sách không xếp hạng — các coin ở đây yếu ngang nhau theo thang điểm này, tối đa hiện 10 coin."
         rows={bearish}
         signal="BEARISH"
         emptyText="Chưa có coin Bearish đồng thuận tuyệt đối."
@@ -936,9 +955,6 @@ function ConsensusTopRow({
         prefetch={false}
         title={`Mở phân tích AI cho ${row.symbol}`}
       >
-        <span className="num w-5 text-xs tabular-nums text-muted-foreground">
-          #{index + 1}
-        </span>
         <span className="font-mono text-sm font-medium text-foreground underline decoration-primary/40 decoration-dotted underline-offset-4 group-hover:text-primary group-hover:decoration-primary">
           {row.symbol}
         </span>
@@ -1588,7 +1604,7 @@ function useWatchlist() {
     },
     onSuccess: (item) => {
       toast.success(
-        `Đã theo dõi ${item.symbol} — sẽ báo Telegram khi trạng thái đồng thuận THAY ĐỔI (đạt mới / gãy).`,
+        `Đã theo dõi ${item.symbol} — sẽ nhắn Telegram khi trạng thái đồng thuận thay đổi (đạt mới / mất).`,
       );
       queryClient.invalidateQueries({ queryKey: ["watchlist", "CRYPTO"] });
     },
@@ -1694,10 +1710,10 @@ function WatchlistPanel() {
           Watchlist · báo Telegram
         </CardTitle>
         <CardDescription>
-          Quét mỗi 15 phút, chỉ báo <strong>thay đổi</strong> sau khi bạn
-          theo dõi: coin <em>đạt</em> đồng thuận mới, hoặc coin đang đồng
-          thuận <em>gãy cấu trúc</em> (tín hiệu thoát). Bật 🔔 trên coin
-          Top 10 = canh điểm gãy cho vị thế đang giữ.
+          Quét mỗi 15 phút, chỉ nhắn khi trạng thái <strong>thay đổi</strong>:
+          coin <em>đạt</em> đồng thuận mới, hoặc coin đang đồng thuận thì{" "}
+          <em>mất</em> đồng thuận. Bấm 🔔 ở bất kỳ coin nào trong bảng kết quả
+          để theo dõi.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
@@ -1935,7 +1951,7 @@ function ConsensusConfigSection({
                 ["notifyBearish", "📉 Báo đồng thuận BEARISH"],
                 [
                   "notifyBreak",
-                  "⚠️ Báo khi MẤT đồng thuận (tín hiệu thoát)",
+                  "⚠️ Báo khi MẤT đồng thuận",
                 ],
               ] as const
             ).map(([key, label]) => (
@@ -2116,7 +2132,7 @@ function FollowButton({ symbol }: { symbol: string }) {
       title={
         existing
           ? "Đang theo dõi — bấm để bỏ"
-          : "Theo dõi: báo Telegram khi coin này MẤT đồng thuận (tín hiệu thoát) hoặc đạt đồng thuận mới"
+          : "Theo dõi: nhắn Telegram khi coin này mất đồng thuận hoặc đạt đồng thuận mới"
       }
     >
       {existing ? <BellRing className="size-3" /> : <Bell className="size-3" />}

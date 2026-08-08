@@ -34,3 +34,7 @@ build
 # helpful for keeping context tight
 README.md
 docs
+
+# Uploaded chart screenshots — same reason as /backups: never bake user
+# files into the image.
+/uploads/

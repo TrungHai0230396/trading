@@ -56,6 +56,13 @@ services:
       DATABASE_URL: "mysql://${MYSQL_USER:-tranding}:${MYSQL_PASSWORD:-tranding}@mysql:3306/${MYSQL_DATABASE:-tranding}"
       NODE_ENV: production
       AUTH_TRUST_HOST: "true"
+      # Chart screenshots live here, not in MySQL. Backed by a named volume so
+      # they survive image rebuilds — a bind mount would also put them inside
+      # the build context, which is how the DB dumps ended up baked into the
+      # image (see .dockerignore).
+      UPLOAD_DIR: /app/uploads
+    volumes:
+      - uploads-data:/app/uploads
     ports:
       # Loopback only — the reverse proxy (Caddy/nginx) on 443 upstreams to
       # 127.0.0.1:3000. Publishing 0.0.0.0 would let the internet bypass
@@ -94,3 +101,4 @@ services:
 
 volumes:
   mysql-data:
+  uploads-data:

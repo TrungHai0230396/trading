@@ -49,3 +49,6 @@ next-env.d.ts
 # Cloudflare origin cert + private key (secrets — created on the VPS)
 /docker/cf-origin/
 *.key
+
+# Chart screenshots when UPLOAD_DIR points at the repo (prod uses a volume)
+/uploads/

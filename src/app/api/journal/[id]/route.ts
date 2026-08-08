@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { db } from "@/lib/db";
+import { deleteStoredFile } from "@/lib/journal/screenshot-store";
 import { tradePatchSchema } from "@/lib/journal/schema";
 import { derivePnl, deriveRMultiple } from "@/lib/journal/derive";
 import { serializeTrade } from "@/lib/journal/serialize";
@@ -291,7 +292,9 @@ export async function DELETE(_req: Request, { params }: RouteCtx) {
   const { id } = await params;
   const existing = await db.tradeJournal.findFirst({
     where: { id, userId: session.user.id },
-    select: { id: true },
+    // Screenshot rows disappear with the trade via the DB cascade, but the
+    // FILES do not — collect their paths before the rows are gone.
+    select: { id: true, screenshots: { select: { url: true } } },
   });
   if (!existing) {
     return NextResponse.json({ error: "Không tìm thấy" }, { status: 404 });
@@ -321,5 +324,12 @@ export async function DELETE(_req: Request, { params }: RouteCtx) {
   }
 
   await db.tradeJournal.delete({ where: { id } });
+  // Files last: the cascade already removed the rows that referenced them, so
+  // a failure here costs disk, not correctness.
+  await Promise.all(
+    existing.screenshots.map((s) =>
+      deleteStoredFile(s.url, session.user!.id as string),
+    ),
+  );
   return NextResponse.json({ ok: true });
 }

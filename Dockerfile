@@ -59,6 +59,12 @@ COPY --from=builder --chown=nextjs:nodejs /app ./
 COPY --chown=nextjs:nodejs docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
+# Chart screenshots are written here at runtime by the non-root app user.
+# Docker seeds a fresh named volume from the image's directory, INCLUDING its
+# ownership — without this the volume is created root-owned and every upload
+# fails with EACCES, at runtime only, long after the build went green.
+RUN mkdir -p /app/uploads && chown nextjs:nodejs /app/uploads
+
 USER nextjs
 EXPOSE 3000
 

@@ -12,6 +12,8 @@ import { format, formatDistanceToNow, parseISO } from "date-fns";
 import { vi } from "date-fns/locale";
 import { toast } from "sonner";
 import {
+  ArrowDown,
+  ArrowUp,
   ArrowUpDown,
   BookOpenText,
   ChevronLeft,
@@ -74,11 +76,16 @@ const INITIAL_FILTERS: Filters = {
   to: "",
 };
 
-const PAGE_SIZE = 50;
+const PAGE_SIZE_OPTIONS = [10, 20, 50, 100] as const;
+const DEFAULT_PAGE_SIZE = 10;
 
 /** Sortable columns — must match the whitelist in tradeListQuerySchema. */
 type SortKey = "openedAt" | "symbol" | "status" | "lotSize" | "pnl" | "rMultiple";
 type SortDir = "asc" | "desc";
+
+/** The view a fresh visit shows, and what a third click / "Đặt lại" restores. */
+const DEFAULT_SORT: SortKey = "openedAt";
+const DEFAULT_DIR: SortDir = "desc";
 
 // ──────────────────────────────────────────────────────────────────────
 // Utility formatters
@@ -143,8 +150,9 @@ export function JournalClient() {
     [filters.market, filters.status, debouncedSymbol, filters.from, filters.to],
   );
 
-  const [sort, setSort] = React.useState<SortKey>("openedAt");
-  const [dir, setDir] = React.useState<SortDir>("desc");
+  const [pageSize, setPageSize] = React.useState<number>(DEFAULT_PAGE_SIZE);
+  const [sort, setSort] = React.useState<SortKey>(DEFAULT_SORT);
+  const [dir, setDir] = React.useState<SortDir>(DEFAULT_DIR);
 
   // Page number, reset whenever the filters OR the sort change: re-sorting
   // while parked on page 5 shows a slice of a list the user never saw the top
@@ -160,19 +168,37 @@ export function JournalClient() {
     filters.to,
     sort,
     dir,
+    // Row 60 is on page 2 at 50/page and page 6 at 10/page — there is no
+    // honest way to keep the user "where they were", so go back to the top
+    // rather than teleporting them somewhere they never chose.
+    pageSize,
   ]);
 
-  /** Click a header: same column flips direction, a new column starts desc. */
-  const toggleSort = React.useCallback((key: SortKey) => {
-    setSort((prev) => {
-      if (prev === key) {
-        setDir((d) => (d === "desc" ? "asc" : "desc"));
-        return prev;
+  /**
+   * Three-state cycle on the same column: giảm dần → tăng dần → mặc định.
+   * A new column starts at giảm dần.
+   *
+   * The third click is an escape hatch IN PLACE, next to where the user
+   * created the sort — but it is deliberately not the only one, because a
+   * cycle nobody discovers is a trap. "Đặt lại" clears the sort too, and the
+   * arrow shows which state you are in.
+   */
+  const toggleSort = React.useCallback(
+    (key: SortKey) => {
+      if (sort !== key) {
+        setSort(key);
+        setDir("desc");
+        return;
       }
-      setDir("desc");
-      return key;
-    });
-  }, []);
+      if (dir === "desc") {
+        setDir("asc");
+        return;
+      }
+      setSort(DEFAULT_SORT);
+      setDir(DEFAULT_DIR);
+    },
+    [sort, dir],
+  );
 
   /**
    * Offset paging, not a cursor. The list used to fetch 50 rows and stop, so a
@@ -181,7 +207,7 @@ export function JournalClient() {
    * March", so the page number is the affordance that actually matches the task.
    */
   const list = useQuery<TradeListResponse>({
-    queryKey: [...queryKey, page, sort, dir],
+    queryKey: [...queryKey, page, pageSize, sort, dir],
     queryFn: async ({ signal }) => {
       const url = new URL("/api/journal", window.location.origin);
       if (filters.market !== "ALL") url.searchParams.set("market", filters.market);
@@ -189,7 +215,7 @@ export function JournalClient() {
       if (debouncedSymbol) url.searchParams.set("symbol", debouncedSymbol);
       if (filters.from) url.searchParams.set("from", filters.from);
       if (filters.to) url.searchParams.set("to", filters.to);
-      url.searchParams.set("limit", String(PAGE_SIZE));
+      url.searchParams.set("limit", String(pageSize));
       url.searchParams.set("page", String(page));
       url.searchParams.set("sort", sort);
       url.searchParams.set("dir", dir);
@@ -386,8 +412,15 @@ export function JournalClient() {
               variant="outline"
               size="sm"
               onClick={() => {
+                // Resets the whole VIEW, not just the filters. A user who
+                // sorted by P/L and wants back out reaches for this button —
+                // leaving the sort applied made it a dead end.
                 setFilters(INITIAL_FILTERS);
                 setDebouncedSymbol("");
+                setSort(DEFAULT_SORT);
+                setDir(DEFAULT_DIR);
+                setPageSize(DEFAULT_PAGE_SIZE);
+                setPage(1);
               }}
             >
               Đặt lại
@@ -496,9 +529,10 @@ export function JournalClient() {
               page={page}
               totalPages={totalPages}
               total={total}
-              pageSize={PAGE_SIZE}
+              pageSize={pageSize}
               loading={list.isFetching}
               onChange={setPage}
+              onPageSizeChange={setPageSize}
             />
           ) : null}
         </CardContent>
@@ -534,6 +568,15 @@ function SortHeader({
       // aria-sort belongs on the <th>, but the arrow alone would leave a
       // screen-reader user with no idea the column is sortable at all.
       aria-label={`Sắp xếp theo ${typeof children === "string" ? children : k}`}
+      // Names what the NEXT click does, so the third state stops being a
+      // secret the user has to stumble into.
+      title={
+        !active
+          ? "Sắp xếp giảm dần"
+          : dir === "desc"
+            ? "Sắp xếp tăng dần"
+            : "Bỏ sắp xếp (về mặc định)"
+      }
       className={cn(
         "inline-flex w-full items-center gap-1 hover:text-foreground",
         align === "right" ? "justify-end" : "justify-start",
@@ -541,12 +584,18 @@ function SortHeader({
       )}
     >
       {children}
-      <ArrowUpDown
-        className={cn(
-          "size-3 shrink-0 transition-opacity",
-          active ? "opacity-100" : "opacity-30",
-        )}
-      />
+      {/* The active column shows WHICH WAY it is sorted. Reusing the neutral
+          up-down glyph for both states made ascending and descending look
+          identical, so the table's current state could not be read at all. */}
+      {active ? (
+        dir === "asc" ? (
+          <ArrowUp className="size-3 shrink-0" />
+        ) : (
+          <ArrowDown className="size-3 shrink-0" />
+        )
+      ) : (
+        <ArrowUpDown className="size-3 shrink-0 opacity-30" />
+      )}
       {active ? (
         <span className="sr-only">
           {dir === "asc" ? "tăng dần" : "giảm dần"}
@@ -579,6 +628,41 @@ function pageWindow(page: number, totalPages: number): (number | "gap")[] {
   return out;
 }
 
+/** One cell of the joined pager. Plain button, not <Button>, so the group can
+ *  share borders and read as a single control instead of six loose chips. */
+function PagerCell({
+  children,
+  active = false,
+  disabled = false,
+  label,
+  onClick,
+}: {
+  children: React.ReactNode;
+  active?: boolean;
+  disabled?: boolean;
+  label?: string;
+  onClick?: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={onClick}
+      aria-label={label}
+      aria-current={active ? "page" : undefined}
+      className={cn(
+        "inline-flex h-8 min-w-8 items-center justify-center px-2 text-xs tabular-nums transition-colors",
+        "disabled:pointer-events-none disabled:opacity-40",
+        active
+          ? "bg-primary font-semibold text-primary-foreground"
+          : "text-muted-foreground hover:bg-muted hover:text-foreground",
+      )}
+    >
+      {children}
+    </button>
+  );
+}
+
 function Pagination({
   page,
   totalPages,
@@ -586,6 +670,7 @@ function Pagination({
   pageSize,
   loading,
   onChange,
+  onPageSizeChange,
 }: {
   page: number;
   totalPages: number;
@@ -593,68 +678,91 @@ function Pagination({
   pageSize: number;
   loading: boolean;
   onChange: (p: number) => void;
+  onPageSizeChange: (n: number) => void;
 }) {
   const first = (page - 1) * pageSize + 1;
   const last = Math.min(page * pageSize, total);
 
   return (
-    <div className="mt-4 flex flex-col items-center gap-2">
-      {totalPages > 1 ? (
-        <div className="flex flex-wrap items-center justify-center gap-1">
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={page <= 1 || loading}
-            onClick={() => onChange(page - 1)}
-            aria-label="Trang trước"
-          >
-            <ChevronLeft className="size-4" />
-          </Button>
-
-          {pageWindow(page, totalPages).map((p, i) =>
-            p === "gap" ? (
-              <span
-                key={`gap-${i}`}
-                className="px-1 text-xs text-muted-foreground"
-              >
-                …
-              </span>
-            ) : (
-              <Button
-                key={p}
-                variant={p === page ? "default" : "outline"}
-                size="sm"
-                className="min-w-9 tabular-nums"
-                disabled={loading}
-                onClick={() => onChange(p)}
-                aria-current={p === page ? "page" : undefined}
-              >
-                {p}
-              </Button>
-            ),
-          )}
-
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={page >= totalPages || loading}
-            onClick={() => onChange(page + 1)}
-            aria-label="Trang sau"
-          >
-            <ChevronRight className="size-4" />
-          </Button>
-        </div>
-      ) : null}
-
-      {/* Always say which slice of what is on screen — showing 50 of 200 with
+    // Table-footer layout: what you're looking at on the left, controls on the
+    // right. The previous version stacked both centred, which read as a
+    // floating toolbar rather than the end of the table.
+    <div className="mt-4 flex flex-col gap-3 border-t pt-3 sm:flex-row sm:items-center sm:justify-between">
+      {/* Always say which slice of what is on screen — showing 50 of 195 with
           no indication is how a user concludes their trades were lost. */}
-      <p className="text-[11px] text-muted-foreground">
+      <p className="text-xs text-muted-foreground">
         {loading ? (
           <Loader2 className="mr-1 inline size-3 animate-spin align-[-1px]" />
         ) : null}
-        Hiện {first}–{last} trong {total} lệnh
-        {totalPages > 1 ? ` · trang ${page}/${totalPages}` : ""}
+        Hiện <span className="tabular-nums text-foreground">{first}–{last}</span>{" "}
+        trong <span className="tabular-nums text-foreground">{total}</span> lệnh
       </p>
+
+      <div className="flex flex-wrap items-center gap-3">
+        <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+          Mỗi trang
+          <Select
+            value={String(pageSize)}
+            onValueChange={(v) => v && onPageSizeChange(Number(v))}
+          >
+            <SelectTrigger size="sm" className="h-8 w-16">
+              {/* Value and label are the same string here, so no mapping is
+                  needed — unlike selects whose value is an enum code. */}
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {PAGE_SIZE_OPTIONS.map((n) => (
+                <SelectItem key={n} value={String(n)}>
+                  {n}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </label>
+
+        {totalPages > 1 ? (
+          <nav
+            aria-label="Phân trang"
+            className="inline-flex divide-x overflow-hidden rounded-lg border"
+          >
+            <PagerCell
+              label="Trang trước"
+              disabled={page <= 1 || loading}
+              onClick={() => onChange(page - 1)}
+            >
+              <ChevronLeft className="size-4" />
+            </PagerCell>
+
+            {pageWindow(page, totalPages).map((p, i) =>
+              p === "gap" ? (
+                <span
+                  key={`gap-${i}`}
+                  className="inline-flex h-8 min-w-8 items-center justify-center text-xs text-muted-foreground"
+                >
+                  …
+                </span>
+              ) : (
+                <PagerCell
+                  key={p}
+                  active={p === page}
+                  disabled={loading}
+                  onClick={() => onChange(p)}
+                >
+                  {p}
+                </PagerCell>
+              ),
+            )}
+
+            <PagerCell
+              label="Trang sau"
+              disabled={page >= totalPages || loading}
+              onClick={() => onChange(page + 1)}
+            >
+              <ChevronRight className="size-4" />
+            </PagerCell>
+          </nav>
+        ) : null}
+      </div>
     </div>
   );
 }

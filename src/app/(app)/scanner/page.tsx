@@ -9,7 +9,7 @@ export default function ScannerPage() {
     <div className="mx-auto max-w-7xl">
       <PageHeader
         title="Quét đa khung thời gian"
-        description="Chấm điểm đồng thuận RSI/EMA-WMA và EMA20/EMA50 trên các khung 1h, 4h, 1d. Điểm 0 = bearish toàn phần, 100 = bullish toàn phần."
+        description="Chấm điểm mức đồng thuận của tín hiệu EMA/WMA trên RSI, qua các khung thời gian bạn chọn. 0 = mọi khung bearish, 100 = mọi khung bullish. Đây là công cụ quan sát, không phải khuyến nghị mua bán."
         actions={
           <Button
             variant="outline"

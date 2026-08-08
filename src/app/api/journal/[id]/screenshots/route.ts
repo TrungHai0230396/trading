@@ -2,13 +2,15 @@ import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { rateLimit } from "@/lib/brokers/rate-limit";
+import { saveDataUrl } from "@/lib/journal/screenshot-store";
 
-// Screenshots are stored as base64 data: URLs directly in MySQL, so every
-// upload permanently grows the DB *and* the nightly backup. These caps
-// keep a single user from bloating storage / filling disk:
+// The upload still ARRIVES as a base64 data: URL (the form reads the file with
+// FileReader), but it is written to a disk volume and only a short path is
+// stored — see lib/journal/screenshot-store.ts for why the bytes must not live
+// in MySQL. These caps bound what one account can push through:
 //   - MAX_URL_LENGTH ~2M chars ≈ 1.5MB image (a chart PNG is well under)
 //   - MAX_PER_TRADE: before/during/after across a couple TFs is plenty
-//   - MAX_PER_USER: backstop against thousands of empty trades each n
+//   - MAX_PER_USER: backstop against thousands of empty trades each
 //     stuffed with images
 const MAX_URL_LENGTH = 2_000_000;
 const MAX_PER_TRADE = 8;
@@ -102,11 +104,25 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     );
   }
 
+  // Write the bytes to disk; the row keeps a path. A remote http(s) URL is
+  // stored as-is — there is nothing of ours to save.
+  let storedUrl = trimmedUrl;
+  if (isDataImage) {
+    const saved = await saveDataUrl(trimmedUrl, userId);
+    if (!saved) {
+      return NextResponse.json(
+        { error: "Định dạng ảnh không hỗ trợ (chỉ png, jpg, webp, gif)." },
+        { status: 400 },
+      );
+    }
+    storedUrl = saved.url;
+  }
+
   try {
     const shot = await db.tradeScreenshot.create({
       data: {
         tradeId: id,
-        url: trimmedUrl,
+        url: storedUrl,
         caption: caption?.trim() ? caption.trim() : null,
         kind: finalKind,
       },
