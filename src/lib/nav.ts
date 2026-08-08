@@ -2,6 +2,7 @@ import {
   LayoutDashboard,
   Calculator,
   BookOpenText,
+  BookMarked,
   Radar,
   Settings,
   MessageSquarePlus,
@@ -58,6 +59,12 @@ export const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
         label: "Cài đặt",
         href: "/settings",
         icon: Settings,
+      },
+      {
+        label: "Hướng dẫn sử dụng",
+        href: "/huong-dan",
+        icon: BookMarked,
+        description: "Cách dùng từng phần của app",
       },
       {
         label: "Liên hệ & Góp ý",

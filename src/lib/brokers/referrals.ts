@@ -38,9 +38,22 @@ export const EXCHANGE_LINKS: Record<Exchange, ExchangeLinks> = {
     apiKey: "https://www.mexc.com/user/openapi",
   },
   OKX: {
-    // TODO(referral): thay bằng link giới thiệu OKX của bạn
-    // (https://www.okx.com/join/<CODE>).
-    register: "https://www.okx.com/join",
+    // Owner referral link (OKX join/49706276).
+    register: "https://okx.com/join/49706276",
     apiKey: "https://www.okx.com/account/my-api",
   },
 };
+
+/**
+ * Forex brokers — kept separate from EXCHANGE_LINKS because they are a
+ * different kind of thing: the app has no read-only API integration for them,
+ * so there is no `apiKey` page to point at. Forex trades reach the journal via
+ * the MT4/MT5 HTML import instead, which is where this link is surfaced.
+ */
+export const FOREX_BROKER_LINKS = {
+  EXNESS: {
+    name: "Exness",
+    // Owner referral link (Exness One Link).
+    register: "https://one.exnessonelink.com/a/uuokuth9?source=app",
+  },
+} as const;

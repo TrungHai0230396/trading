@@ -8,11 +8,13 @@ import { toast } from "sonner";
 import {
   CheckCircle2,
   CloudUpload,
+  ExternalLink,
   FileWarning,
   Inbox,
   Loader2,
   RefreshCw,
 } from "lucide-react";
+import { FOREX_BROKER_LINKS } from "@/lib/brokers/referrals";
 
 import {
   Card,
@@ -402,6 +404,23 @@ export function MtImportClient({
               </li>
             </ul>
           </details>
+
+          {/* This page is the app's only forex surface, so it's where a reader
+              who doesn't yet have an MT4/MT5 account actually is. */}
+          <a
+            href={FOREX_BROKER_LINKS.EXNESS.register}
+            target="_blank"
+            rel="noreferrer"
+            className="flex items-center justify-between gap-2 rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-xs transition-colors hover:bg-primary/10"
+          >
+            <span className="text-muted-foreground">
+              Chưa có tài khoản forex MT4/MT5?{" "}
+              <strong className="text-primary">
+                Mở tài khoản {FOREX_BROKER_LINKS.EXNESS.name}
+              </strong>
+            </span>
+            <ExternalLink className="size-3.5 shrink-0 text-primary" />
+          </a>
         </CardContent>
       </Card>
 

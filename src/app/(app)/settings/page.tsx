@@ -7,6 +7,7 @@ import {
   BitgetBrokerCard,
   BrokerConnectionSummary,
   ChangePasswordCard,
+  ForexBrokerCard,
   MexcBrokerCard,
   OkxBrokerCard,
   TelegramNotifyCard,
@@ -43,6 +44,10 @@ export default async function SettingsPage() {
             <BinanceBrokerCard />
             <MexcBrokerCard />
             <OkxBrokerCard />
+            {/* Forex sits with the exchanges so "which brokers does this app
+                work with" has ONE answer in one place — even though it has no
+                API connection and works through the MT4/MT5 import. */}
+            <ForexBrokerCard />
           </div>
           <TelegramNotifyCard />
           {/* MetaApi (Exness / MT4 · MT5) tạm ẩn — chưa setup được. Component

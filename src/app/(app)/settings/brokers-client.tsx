@@ -13,7 +13,11 @@ import {
   ExternalLink,
 } from "lucide-react";
 import Link from "next/link";
-import { EXCHANGE_LINKS, type Exchange } from "@/lib/brokers/referrals";
+import {
+  EXCHANGE_LINKS,
+  FOREX_BROKER_LINKS,
+  type Exchange,
+} from "@/lib/brokers/referrals";
 import { BrokerLogo } from "@/components/broker-logo";
 import { cn } from "@/lib/utils";
 
@@ -2138,6 +2142,54 @@ type TgStatus = {
   connected: boolean;
   prefs?: DmPrefs;
 };
+
+/**
+ * Exness / forex — an INFO card, not a connection card.
+ *
+ * It sits with the exchange cards because that is where a user looks for
+ * "which brokers does this app work with", but it deliberately has no key form:
+ * there is no read-only API integration for MT4/MT5 brokers, so forex trades
+ * reach the journal through the HTML statement import instead. Saying that
+ * plainly here is better than leaving the user hunting for a form that will
+ * never exist.
+ */
+export function ForexBrokerCard() {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-base">
+          <span className="flex size-5 shrink-0 items-center justify-center rounded bg-[#FFDF00] text-[10px] font-bold text-black">
+            E
+          </span>
+          {FOREX_BROKER_LINKS.EXNESS.name} (forex — MT4/MT5)
+        </CardTitle>
+        <CardDescription>
+          Forex chưa có kết nối API chỉ-đọc. Lệnh forex vào nhật ký bằng cách
+          tải lên báo cáo HTML xuất từ MT4/MT5.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <a
+          href={FOREX_BROKER_LINKS.EXNESS.register}
+          target="_blank"
+          rel="noreferrer"
+          className="flex items-center justify-between gap-2 rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-xs transition-colors hover:bg-primary/10"
+        >
+          <span className="text-muted-foreground">
+            Chưa có tài khoản forex?{" "}
+            <strong className="text-primary">
+              Mở tài khoản {FOREX_BROKER_LINKS.EXNESS.name}
+            </strong>
+          </span>
+          <ExternalLink className="size-3.5 shrink-0 text-primary" />
+        </a>
+        <Button variant="outline" size="sm" render={<Link href="/journal/import" />}>
+          Nhập lệnh từ MT4/MT5
+        </Button>
+      </CardContent>
+    </Card>
+  );
+}
 
 export function TelegramNotifyCard() {
   const [status, setStatus] = React.useState<TgStatus | null>(null);

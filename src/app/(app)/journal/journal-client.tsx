@@ -3,6 +3,7 @@
 import * as React from "react";
 import Link from "next/link";
 import {
+  useInfiniteQuery,
   useMutation,
   useQuery,
   useQueryClient,
@@ -137,9 +138,17 @@ export function JournalClient() {
     [filters.market, filters.status, debouncedSymbol, filters.from, filters.to],
   );
 
-  const list = useQuery<TradeListResponse>({
+  /**
+   * Paged, not capped. This used to be a plain useQuery asking for 50 rows and
+   * rendering whatever came back — so a journal with 200 trades showed the
+   * first 50 and the rest were simply unreachable, with nothing on screen
+   * saying so. The API had cursor pagination all along; the client just never
+   * asked for page two.
+   */
+  const list = useInfiniteQuery<TradeListResponse>({
     queryKey,
-    queryFn: async ({ signal }) => {
+    initialPageParam: null,
+    queryFn: async ({ signal, pageParam }) => {
       const url = new URL("/api/journal", window.location.origin);
       if (filters.market !== "ALL") url.searchParams.set("market", filters.market);
       if (filters.status !== "ALL") url.searchParams.set("status", filters.status);
@@ -147,6 +156,7 @@ export function JournalClient() {
       if (filters.from) url.searchParams.set("from", filters.from);
       if (filters.to) url.searchParams.set("to", filters.to);
       url.searchParams.set("limit", String(PAGE_SIZE));
+      if (pageParam) url.searchParams.set("cursor", String(pageParam));
       const res = await fetch(url, { signal });
       if (!res.ok) {
         const j = (await res.json().catch(() => null)) as
@@ -156,8 +166,15 @@ export function JournalClient() {
       }
       return (await res.json()) as TradeListResponse;
     },
+    getNextPageParam: (last) => last.nextCursor,
     placeholderData: keepPreviousData,
   });
+
+  // Flattened rows — every component below reads this instead of a single page.
+  const items = React.useMemo(
+    () => (list.data?.pages ?? []).flatMap((p) => p.items),
+    [list.data],
+  );
 
   const stats = useQuery<JournalStatsResponse>({
     queryKey: ["journal", "stats"],
@@ -205,9 +222,7 @@ export function JournalClient() {
   // Live quotes for OPEN trades — fills the empty exit-price and P/L slots
   // with the current price and unrealized PnL. Polls every 30s while any
   // OPEN trade is visible.
-  const hasOpenTrades = (list.data?.items ?? []).some(
-    (t) => t.status === "OPEN",
-  );
+  const hasOpenTrades = items.some((t) => t.status === "OPEN");
   const liveQuotes = useQuery<{ quotes: LiveQuote[] }>({
     queryKey: ["journal", "live-quotes"],
     queryFn: async ({ signal }) => {
@@ -435,10 +450,34 @@ export function JournalClient() {
           <TradeTable
             loading={list.isLoading}
             error={list.error instanceof Error ? list.error.message : null}
-            items={list.data?.items ?? []}
+            items={items}
             currency={stats.data?.currency ?? "USD"}
             quotes={quoteByTradeId}
           />
+
+          {/* Always state how many rows are on screen. Showing 50 of 200 with
+              no indication is how a user concludes their trades were lost. */}
+          {items.length > 0 ? (
+            <div className="mt-4 flex flex-col items-center gap-2">
+              {list.hasNextPage ? (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => list.fetchNextPage()}
+                  disabled={list.isFetchingNextPage}
+                >
+                  {list.isFetchingNextPage ? (
+                    <Loader2 className="size-4 animate-spin" />
+                  ) : null}
+                  Xem thêm {PAGE_SIZE} lệnh
+                </Button>
+              ) : null}
+              <p className="text-[11px] text-muted-foreground">
+                Đang hiện {items.length} lệnh
+                {list.hasNextPage ? " — còn nữa" : " (hết)"}
+              </p>
+            </div>
+          ) : null}
         </CardContent>
       </Card>
     </div>

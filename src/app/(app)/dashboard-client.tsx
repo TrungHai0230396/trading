@@ -734,8 +734,12 @@ function PortfolioHero({
       <CardContent className="grid gap-6 py-5 lg:grid-cols-[minmax(200px,260px)_1fr]">
         {/* Left: the number */}
         <div className="space-y-2">
+          {/* "Tổng tài sản" read as the user's entire net worth. It is only
+              the sum of the exchanges they connected — no forex account, no
+              off-exchange wallet, no exchange they haven't linked. Naming the
+              scope in the label (and again underneath) is the whole point. */}
           <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-            Tổng tài sản
+            Tài sản trên sàn đã kết nối
             {hasError ? (
               <span className="ml-1 normal-case tracking-normal text-amber-600 dark:text-amber-400">
                 (thiếu dữ liệu)
@@ -764,9 +768,19 @@ function PortfolioHero({
               </button>
             </p>
           ) : null}
+          {/* Say what is NOT in the number, not just what is. Someone whose
+              real money also sits in a forex account or a cold wallet must not
+              read this as their whole position. */}
+          <p className="text-[11px] leading-relaxed text-muted-foreground/70">
+            Chỉ tính {data.brokers.length} sàn bạn đã nối
+            {data.brokers.length > 0
+              ? ` (${data.brokers.map(brokerLabel).join(", ")})`
+              : ""}
+            . Không gồm ví ngoài sàn, tài khoản forex hay sàn chưa kết nối.
+          </p>
           <p className="text-[11px] text-muted-foreground/70">
             Cập nhật {format(parseISO(data.fetchedAt), "HH:mm")} · USDT-M ·
-            chỉ xem
+            chỉ đọc, app không đặt lệnh
           </p>
         </div>
 
@@ -792,6 +806,14 @@ function PortfolioHero({
   );
 }
 
+/** Display name for a broker — shared by the hero's scope line and the panel. */
+function brokerLabel(b: Portfolio["brokers"][number]): string {
+  if (b.broker === "BITGET") return "Bitget";
+  if (b.broker === "BINANCE") return "Binance";
+  if (b.broker === "MEXC") return "MEXC";
+  return "OKX";
+}
+
 function BrokerPanel({
   b,
   wide = false,
@@ -799,14 +821,7 @@ function BrokerPanel({
   b: Portfolio["brokers"][number];
   wide?: boolean;
 }) {
-  const name =
-    b.broker === "BITGET"
-      ? "Bitget"
-      : b.broker === "BINANCE"
-        ? "Binance"
-        : b.broker === "MEXC"
-          ? "MEXC"
-          : "OKX";
+  const name = brokerLabel(b);
   const errored = Boolean(b.spot.error || b.futures.error);
   const total = b.spot.totalUsd + b.futures.equity;
   const upnl = b.futures.unrealizedPnl;

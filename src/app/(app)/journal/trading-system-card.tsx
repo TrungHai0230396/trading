@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ListChecks, Star } from "lucide-react";
+import { ListChecks, Plus, Star } from "lucide-react";
 
 import {
   Card,
@@ -21,6 +21,7 @@ import {
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
+import { TradingSystemsSheet } from "./trading-systems-sheet";
 import type {
   SerializedTradingSystem,
   SystemCheckSnapshot,
@@ -181,7 +182,25 @@ export function TradingSystemCard({
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="space-y-1.5">
-          <label className="text-xs text-muted-foreground">Chọn hệ thống</label>
+          <div className="flex items-center justify-between gap-2">
+            <label className="text-xs text-muted-foreground">
+              Chọn hệ thống
+            </label>
+            {/* Manage/create without leaving the trade. The sheet invalidates
+                ["trading-systems"] — the query feeding the select below — so a
+                system created here shows up in the list immediately. */}
+            <TradingSystemsSheet
+              trigger={
+                <button
+                  type="button"
+                  className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
+                >
+                  <Plus className="size-3.5" />
+                  Tạo / sửa hệ thống
+                </button>
+              }
+            />
+          </div>
           <Select value={selectedId} onValueChange={handleSelect}>
             <SelectTrigger className="w-full">
               {/* base-ui Select.Value hiển thị value thô (cuid) trừ khi

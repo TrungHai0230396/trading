@@ -4,6 +4,10 @@ const PUBLIC_PATHS = [
   "/login",
   "/register",
   "/terms",
+  // The usage guide is the page the launch post links to: a stranger has to be
+  // able to read it — above all the read-only API-key explanation — BEFORE
+  // deciding whether to sign in and hand over an exchange key.
+  "/huong-dan",
   "/api/auth",
   "/api/register",
   // Public liveness probe for external uptime monitors — leaks nothing

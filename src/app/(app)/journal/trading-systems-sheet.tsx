@@ -91,7 +91,18 @@ function fromSystem(s: SerializedTradingSystem): Draft {
 // Sheet
 // ──────────────────────────────────────────────────────────────────────
 
-export function TradingSystemsSheet() {
+export function TradingSystemsSheet({
+  trigger,
+}: {
+  /**
+   * Optional replacement for the default "Hệ thống" button, so the same sheet
+   * can be opened from inside the trade form — a user picking a system there
+   * shouldn't have to abandon a half-filled trade just to create one. Creating
+   * here invalidates ["trading-systems"], the same key the form's select reads,
+   * so the new system appears in the dropdown straight away.
+   */
+  trigger?: React.ReactElement;
+} = {}) {
   const [open, setOpen] = React.useState(false);
   const [view, setView] = React.useState<"list" | "edit">("list");
   const [editingId, setEditingId] = React.useState<string | null>(null);
@@ -234,10 +245,12 @@ export function TradingSystemsSheet() {
       <Sheet open={open} onOpenChange={setOpen}>
         <SheetTrigger
           render={
-            <Button variant="outline">
-              <ListChecks className="size-4" />
-              Hệ thống
-            </Button>
+            trigger ?? (
+              <Button variant="outline">
+                <ListChecks className="size-4" />
+                Hệ thống
+              </Button>
+            )
           }
         />
         <SheetContent className="flex w-full flex-col gap-0 sm:max-w-lg">
