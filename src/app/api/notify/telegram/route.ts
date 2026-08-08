@@ -74,7 +74,6 @@ export async function POST() {
  */
 const PrefsBody = z.object({
   weeklyDigest: z.boolean(),
-  levelWatch: z.boolean(),
 });
 
 export async function PATCH(req: Request) {

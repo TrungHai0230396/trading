@@ -4,7 +4,6 @@
  * We use it to start the in-process cron timers:
  *   - broker sync every 2 minutes (fill/close/cancel detection + Telegram)
  *   - watchlist 4-TF consensus scan every 15 minutes (Telegram alert)
- *   - SL/TP level watch every 3 minutes (opt-in, own open trades)
  *   - weekly journal digest, ticked every 10 minutes (opt-in; the tick only
  *     checks the Vietnam wall clock — see cron/weekly-digest.ts)
  *
@@ -19,7 +18,6 @@
 const SYNC_INTERVAL_MS = 2 * 60_000;
 const CONSENSUS_INTERVAL_MS = 15 * 60_000;
 const NEWS_INTERVAL_MS = 60 * 60_000;
-const LEVEL_WATCH_INTERVAL_MS = 3 * 60_000;
 /**
  * The digest is weekly, but the TICK is frequent: a weekly setInterval drifts
  * and forgets where it was on every restart. Each tick is a wall-clock check
@@ -49,7 +47,6 @@ export async function register() {
   const { runConsensusScanForAllUsers } = await import(
     "@/lib/cron/consensus-scan"
   );
-  const { runLevelWatchForAllUsers } = await import("@/lib/cron/level-watch");
   const { runWeeklyDigestForAllUsers } = await import(
     "@/lib/cron/weekly-digest"
   );
@@ -86,10 +83,6 @@ export async function register() {
     CONSENSUS_INTERVAL_MS,
   );
   setInterval(
-    guarded("level-watch", runLevelWatchForAllUsers),
-    LEVEL_WATCH_INTERVAL_MS,
-  );
-  setInterval(
     guarded("weekly-digest", runWeeklyDigestForAllUsers),
     DIGEST_INTERVAL_MS,
   );
@@ -109,6 +102,6 @@ export async function register() {
   startTelegramPolling();
 
   console.log(
-    `[cron] started: broker-sync every ${SYNC_INTERVAL_MS / 60000}m, consensus-scan every ${CONSENSUS_INTERVAL_MS / 60000}m, news-refresh every ${NEWS_INTERVAL_MS / 60000}m, level-watch every ${LEVEL_WATCH_INTERVAL_MS / 60000}m, weekly-digest every ${DIGEST_INTERVAL_MS / 60000}m`,
+    `[cron] started: broker-sync every ${SYNC_INTERVAL_MS / 60000}m, consensus-scan every ${CONSENSUS_INTERVAL_MS / 60000}m, news-refresh every ${NEWS_INTERVAL_MS / 60000}m, weekly-digest every ${DIGEST_INTERVAL_MS / 60000}m`,
   );
 }

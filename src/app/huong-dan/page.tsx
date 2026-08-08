@@ -9,6 +9,7 @@
  */
 
 import Link from "next/link";
+import { PublicPageExit } from "@/components/public-page-exit";
 import {
   BookOpenText,
   Calculator,
@@ -292,19 +293,20 @@ export default function GuidePage() {
               ở trang Quét đa khung.
             </li>
             <li>
-              <strong className="text-foreground">Chạm SL/TP của bạn</strong> —
-              giá chạm mức bạn đã ghi trong nhật ký thì bot nhắc vào cập nhật
-              kết quả.
-            </li>
-            <li>
               <strong className="text-foreground">Tổng kết tuần</strong> — vài
               dòng số liệu của chính bạn, đầu tuần.
             </li>
           </ul>
           <p>
-            Hai mục sau mặc định <strong className="text-foreground">tắt</strong>
-            , bạn tự bật nếu muốn. Muốn dừng hẳn thì gõ{" "}
+            Tổng kết tuần mặc định{" "}
+            <strong className="text-foreground">tắt</strong>, bạn tự bật nếu
+            muốn. Muốn dừng hẳn thì gõ{" "}
             <code className="rounded bg-muted px-1">/stop</code> trong Telegram.
+          </p>
+          <p>
+            App <strong className="text-foreground">không</strong> báo giá chạm
+            SL/TP — sàn của bạn đã có sẵn thông báo đó và chính xác hơn, vì sàn
+            biết chắc lệnh có khớp hay không.
           </p>
         </Section>
 
@@ -344,9 +346,7 @@ export default function GuidePage() {
       </div>
 
       <div className="mt-8 flex flex-wrap gap-4 text-sm">
-        <Link href="/" className="font-medium text-primary hover:underline">
-          Vào app →
-        </Link>
+        <PublicPageExit />
         <Link
           href="/terms"
           className="font-medium text-muted-foreground hover:underline"

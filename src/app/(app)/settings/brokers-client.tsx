@@ -2135,7 +2135,7 @@ export function OkxBrokerCard() {
 // ────────────────────────────────────────────────────────────────────
 
 /** Opt-ins for the two DMs about the user's OWN journal. Both default OFF. */
-type DmPrefs = { weeklyDigest: boolean; levelWatch: boolean };
+type DmPrefs = { weeklyDigest: boolean };
 
 type TgStatus = {
   enabled: boolean;
@@ -2397,21 +2397,6 @@ export function TelegramNotifyCard() {
                     />
                   </label>
 
-                  <label className="flex cursor-pointer items-start justify-between gap-3 rounded-md border bg-card/40 px-3 py-2.5">
-                    <span className="space-y-0.5">
-                      <span className="block text-sm">Báo chạm SL / TP</span>
-                      <span className="block text-xs text-muted-foreground">
-                        Khi giá chạm mức SL hoặc TP bạn đã ghi trong một lệnh
-                        đang mở, bot nhắn một lần cho mỗi mức. Chỉ áp dụng cho
-                        lệnh CRYPTO có cặp trên Binance.
-                      </span>
-                    </span>
-                    <Switch
-                      className="mt-0.5 shrink-0"
-                      checked={prefs.levelWatch}
-                      onCheckedChange={(v) => savePref("levelWatch", !!v)}
-                    />
-                  </label>
                 </>
               )}
             </div>

@@ -141,8 +141,6 @@ const PERSONAL_KEY = "alert:personal-dm";
 export type PersonalDmPrefs = {
   /** Weekly recap of the user's own closed trades (Monday morning, VN). */
   weeklyDigest: boolean;
-  /** DM when live price reaches an SL/TP the user recorded on an OPEN trade. */
-  levelWatch: boolean;
 };
 
 /** Opt-IN: an absent row, and anything short of an explicit `true`, is OFF. */
@@ -150,7 +148,6 @@ function parsePersonalDmPrefs(value: unknown): PersonalDmPrefs {
   const v = (value ?? {}) as Partial<PersonalDmPrefs>;
   return {
     weeklyDigest: v.weeklyDigest === true,
-    levelWatch: v.levelWatch === true,
   };
 }
 

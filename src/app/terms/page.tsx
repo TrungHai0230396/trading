@@ -7,6 +7,7 @@
  */
 
 import Link from "next/link";
+import { PublicPageExit } from "@/components/public-page-exit";
 
 export const metadata = {
   title: "Điều khoản sử dụng — Nhật Ký Trade",
@@ -124,12 +125,13 @@ export default function TermsPage() {
         </section>
       </div>
 
-      <div className="mt-10">
+      <div className="mt-10 flex flex-wrap gap-4">
+        <PublicPageExit />
         <Link
-          href="/register"
-          className="text-sm font-medium text-primary hover:underline"
+          href="/huong-dan"
+          className="text-sm font-medium text-muted-foreground hover:underline"
         >
-          ← Quay lại đăng ký
+          Hướng dẫn sử dụng
         </Link>
       </div>
     </div>

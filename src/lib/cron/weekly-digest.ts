@@ -277,8 +277,10 @@ async function buildDigest(
     "",
     lines.join("\n"),
     "",
+    // No "turn this off" footer: the user opted in from Settings, so they
+    // already know where the switch is, and repeating it every week is noise
+    // in a message that should be short enough to read at a glance.
     url ? `Xem chi tiết: ${url}` : "Xem chi tiết trong app → Nhật ký.",
-    "Tắt tin này: Cài đặt → Thông báo Telegram.",
   ].join("\n");
 }
 
